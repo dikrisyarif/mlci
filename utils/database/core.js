@@ -1,126 +1,74 @@
-import { DB_CONFIG } from './config';
+import { initDb, getDb as getDbInstance, queueOperation } from './operations';
 import { logDbOperation } from './monitor';
-import { 
-  initDb, 
-  getDb, 
-  queueOperation, 
-  executeWithLog,
-  forceCleanupDatabase
-} from './operations';
-import { migrateDatabase, isSameDay } from './migration';
 
-// Initialize database and create tables
-export const initDatabase = async () => {
-  logDbOperation('init', 'started');
-  
+// ---------------------------------------------------------------------------
+// getDb — always returns the same initialized DB
+// ---------------------------------------------------------------------------
+export const getDb = async () => {
   try {
-    // Initialize database and ensure it has async methods
-    const db = await initDb();
-    if (!db) {
-      throw new Error('Failed to initialize database');
-    }
-
-    // Verify database is working before proceeding
-    await db.execAsync('SELECT 1');
-    
-    // Check current version
-    let currentVersion = 0;
-    try {
-      const versionResult = await queueOperation(async () => {
-        const result = await db.getFirstAsync(
-          'SELECT value FROM metadata WHERE key = ?',
-          ['db_version']
-        );
-        return result;
-      }, 'Get database version');
-
-      currentVersion = versionResult ? parseInt(versionResult.value, 10) : 0;
-    } catch (versionErr) {
-      // If reading db_version failed (likely metadata table missing),
-      // assume fresh DB and set currentVersion = 0 so migration will run.
-      logDbOperation('init', 'version-check-failed', { error: versionErr });
-      currentVersion = 0;
-    }
-
-    // Migrate if needed (or if we couldn't read version)
-    if (currentVersion !== DB_CONFIG.version) {
-      await migrateDatabase(db, currentVersion, DB_CONFIG.version);
-      await queueOperation(async () => {
-        await db.runAsync(
-          'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
-          ['db_version', DB_CONFIG.version.toString()]
-        );
-      }, 'Update database version');
-    }
-    
-    logDbOperation('init', 'completed');
+    const db = await getDbInstance();
     return db;
-  } catch (error) {
-    logDbOperation('init', 'failed', { error });
-    throw error;
+  } catch (e) {
+    logDbOperation('getDb', 'failed', { error: e });
+    throw e;
   }
 };
 
-// Reset database
-export const resetDatabase = async () => {
-  logDbOperation('reset', 'started');
-  
-  try {
-    await forceCleanupDatabase();
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const db = await initDb();
-    const today = new Date().toISOString().split('T')[0];
+// ---------------------------------------------------------------------------
+// execute SQL helpers — routed via queueOperation
+// ---------------------------------------------------------------------------
+export const executeWithLog = async (
+  operation,
+  sql,
+  params = [],
+  useTransaction = false
+) => {
+  return queueOperation(
+    async () => {
+      const db = await getDb();
 
+      logDbOperation(operation, 'started', { sql, params });
 
-    // Clear ALL data from all tables (no restore)
-    await queueOperation(async () => {
-      const tables = [
-        DB_CONFIG.tables.background_tracks,
-        DB_CONFIG.tables.contract_checkins,
-        DB_CONFIG.tables.contracts,
-        DB_CONFIG.tables.app_state,
-        DB_CONFIG.tables.metadata
-      ];
-      for (const table of tables) {
-        logDbOperation('reset', `clearing-${table}`);
-        await db.execAsync(`DELETE FROM ${table};`);
+      let result;
+
+      if (useTransaction) {
+        await db.execAsync('BEGIN;');
+        try {
+          result = await db[operation](sql, params);
+          await db.execAsync('COMMIT;');
+        } catch (err) {
+          await db.execAsync('ROLLBACK;');
+          throw err;
+        }
+      } else {
+        result = await db[operation](sql, params);
       }
-    }, 'Clear all data');
 
-    // Reinitialize structure
-    await migrateDatabase(db, 0, DB_CONFIG.version);
-
-    // Get final stats
-    const [tracksCount, checkinsCount, contractsCount] = await Promise.all([
-      queueOperation(async () => {
-        return await db.getFirstAsync('SELECT COUNT(*) as count FROM background_tracks;');
-      }, 'Count remaining tracks'),
-      queueOperation(async () => {
-        return await db.getFirstAsync('SELECT COUNT(*) as count FROM contract_checkins;');
-      }, 'Count remaining check-ins'),
-      queueOperation(async () => {
-        return await db.getFirstAsync('SELECT COUNT(*) as count FROM contracts;');
-      }, 'Count remaining contracts')
-    ]);
-
-    logDbOperation('reset', 'completed', {
-      stats: {
-        remainingTracks: tracksCount?.count || 0,
-        remainingCheckins: checkinsCount?.count || 0,
-        remainingContracts: contractsCount?.count || 0
-      }
-    });
-    return true;
-  } catch (error) {
-    logDbOperation('reset', 'failed', { error });
-    throw error;
-  }
+      logDbOperation(operation, 'completed');
+      return result;
+    },
+    `${operation}: ${sql}`
+  );
 };
 
-// Export all needed functions
-export {
-  getDb,
-  executeWithLog,
-  forceCleanupDatabase
+// ---------------------------------------------------------------------------
+// runQuery helper (SELECT returning rows)
+// ---------------------------------------------------------------------------
+export const runQuery = async (sql, params = []) => {
+  return executeWithLog('getAllAsync', sql, params);
 };
+
+// ---------------------------------------------------------------------------
+// runCommand helper (INSERT / UPDATE / DELETE)
+// ---------------------------------------------------------------------------
+export const runCommand = async (sql, params = []) => {
+  return executeWithLog('runAsync', sql, params);
+};
+
+// ---------------------------------------------------------------------------
+// runGetFirst helper (SELECT returning one row)
+// ---------------------------------------------------------------------------
+export const runGetFirst = async (sql, params = []) => {
+  return executeWithLog('getFirstAsync', sql, params);
+};
+
