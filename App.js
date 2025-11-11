@@ -1,6 +1,6 @@
 // App.js
 import React, { useState, useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import Navigation from './navigation/AppNavigator';
 import { AuthProvider } from './context/AuthContext';
 import { ApiProvider } from './context/ApiContext';
@@ -12,17 +12,7 @@ import { LogBox } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Database from './utils/database';
 
-// DEBUG: Log checkinLocations setiap kali app mount
-LogBox.ignoreLogs(['Warning: ...']); // Ignore log notification by message
-
-// (async () => {
-//   try {
-//     const data = await AsyncStorage.getItem('CheckinLocations');
-//     //console.log('DEBUG: CheckinLocations on app start:', data);
-//   } catch (e) {
-//     //console.log('DEBUG: Gagal membaca CheckinLocations', e);
-//   }
-// })();
+LogBox.ignoreLogs(['Warning: ...']); // Ignore specific warnings
 
 const App = () => {
   const [fontsLoaded] = useFonts({
@@ -32,8 +22,9 @@ const App = () => {
   const [isSplashVisible, setSplashVisible] = useState(true);
   const [isDbInitialized, setIsDbInitialized] = useState(false);
   const [dbInitError, setDbInitError] = useState(null);
+  const [retryFlag, setRetryFlag] = useState(0); // trigger re-run on retry
 
-  // Initialize database and schedule cleanup
+  // Initialize database and migrate
   useEffect(() => {
     let mounted = true;
 
@@ -41,67 +32,93 @@ const App = () => {
       const maxAttempts = 3;
       let attempt = 0;
       let lastError = null;
+
       while (attempt < maxAttempts && mounted) {
         attempt++;
         try {
-          //console.log('[DEBUG] App.js: Initializing database (attempt', attempt, ')...');
+          console.log(`[DEBUG][App.js] Initializing database (attempt ${attempt})...`);
+
+          // 1. Initialize DB
           const db = await Database.initDatabase();
-          if (db && db._db && db._db.filename) {
-            console.log('[DEBUG][App.js] DB path:', db._db.filename);
-          } else if (db && db.filename) {
-            console.log('[DEBUG][App.js] DB path:', db.filename);
+          if (db?.filename || db?._db?.filename) {
+            console.log('[DEBUG][App.js] DB path:', db.filename || db._db.filename);
           } else {
             console.log('[DEBUG][App.js] DB path: [unknown]');
           }
 
-          // Import dependencies only after DB initialized
+          // 2. Import services AFTER DB ready
           const { migratePendingLocationsToDatabase } = await import('./services/trackingService');
           const { initializeApp } = await import('./app/initialization');
 
-          // Get current user
+          // 3. Migrate any pending location data
+          await migratePendingLocationsToDatabase();
+
+          // 4. Initialize app if logged in
           const employeeName = await AsyncStorage.getItem('employeeName');
           if (employeeName) {
             await initializeApp(employeeName);
           }
 
-          await migratePendingLocationsToDatabase();
-
+          // ✅ DB initialized successfully
           if (mounted) {
             setIsDbInitialized(true);
             setDbInitError(null);
           }
-          return;
+
+          console.log('[DEBUG][App.js] Database initialization completed successfully.');
+          return; // success — exit retry loop
         } catch (error) {
           lastError = error;
-          console.error('[DEBUG] App.js: DB init attempt failed:', attempt, error);
-          // small backoff
-          await new Promise(r => setTimeout(r, 1000 * attempt));
+          console.error(`[DEBUG][App.js] DB init attempt ${attempt} failed:`, error);
+          await new Promise((r) => setTimeout(r, 1000 * attempt)); // exponential backoff
         }
       }
 
+      // ❌ all attempts failed
       if (mounted) {
-        setDbInitError(lastError ? String(lastError.message || lastError) : 'Unknown error');
+        const message = lastError?.message || String(lastError) || 'Unknown error';
+        setDbInitError(message);
+        console.error('[DEBUG][App.js] Final DB initialization error:', message);
       }
     };
 
     initializeApplication();
 
-    return () => { mounted = false; };
-  }, []); // Empty dependency array means this runs once on mount
+    return () => {
+      mounted = false;
+    };
+  }, [retryFlag]); // run again on retry
 
-  // Show loading indicator while initializing
+  // Error state — show retry UI
+  if (dbInitError) {
+    return (
+      <View style={[styles.container, { padding: 20 }]}>
+        <Text style={{ marginBottom: 12, textAlign: 'center' }}>
+          Failed to initialize local database:
+        </Text>
+        <Text style={{ marginBottom: 20, color: 'red', textAlign: 'center' }}>
+          {dbInitError}
+        </Text>
+        <TouchableOpacity
+          onPress={() => {
+            setDbInitError(null);
+            setIsDbInitialized(false);
+            setRetryFlag((v) => v + 1); // trigger re-run
+          }}
+          style={{
+            padding: 12,
+            backgroundColor: '#007bff',
+            borderRadius: 8,
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Loading state
   if (!fontsLoaded || !isDbInitialized) {
-    if (dbInitError) {
-      return (
-        <View style={[styles.container, { padding: 20 }]}> 
-          <Text style={{ marginBottom: 12, textAlign: 'center' }}>Failed to initialize local database:</Text>
-          <Text style={{ marginBottom: 20, color: 'red', textAlign: 'center' }}>{dbInitError}</Text>
-          <TouchableOpacity onPress={() => { setDbInitError(null); setIsDbInitialized(false); /* trigger retry by re-running effect via state change */ window.requestAnimationFrame(() => location.reload()); }} style={{ padding: 12, backgroundColor: '#007bff', borderRadius: 8 }}>
-            <Text style={{ color: '#fff' }}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#32a852" />
@@ -132,8 +149,8 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#ffffff'
-  }
+    backgroundColor: '#ffffff',
+  },
 });
 
 export default App;

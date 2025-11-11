@@ -31,6 +31,18 @@ export const saveContracts = async (contracts, employeeName) => {
       // Commit transaction
       await db.execAsync('COMMIT;');
 
+      // Try to force a WAL checkpoint so other connections see the changes immediately.
+      // Some sqlite builds (especially older or embedded wrappers) may not support this pragma;
+      // run in a try/catch and degrade gracefully if it fails.
+      try {
+        if (db && db.execAsync) {
+          await db.execAsync('PRAGMA wal_checkpoint(FULL);');
+          console.log('[DB][saveContracts] WAL checkpoint completed');
+        }
+      } catch (checkpointErr) {
+        console.warn('[DB][saveContracts] WAL checkpoint failed or not supported:', checkpointErr?.message || checkpointErr);
+      }
+
       // Verify data was saved successfully
       const verifyData = await getContracts(employeeName);
       if (!verifyData || verifyData.length === 0) {

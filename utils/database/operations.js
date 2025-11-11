@@ -102,6 +102,16 @@ export const initDb = async () => {
       }
       // Verify the database is working
       await db.execAsync('SELECT 1');
+      // Improve durability and cross-connection visibility
+      try {
+        // Enable WAL mode where supported
+        await db.execAsync('PRAGMA journal_mode = WAL;');
+        await db.execAsync('PRAGMA synchronous = NORMAL;');
+        logDbOperation('init-db', 'pragma-set');
+      } catch (pragmaErr) {
+        // Not all sqlite implementations support these pragmas; ignore failures
+        logDbOperation('init-db', 'pragma-failed', { error: pragmaErr });
+      }
       logDbOperation('init-db', 'completed');
     } else if (db._closed) {
       // If database was closed, reopen it
