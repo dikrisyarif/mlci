@@ -33,6 +33,7 @@
     "expo-sqlite": "^15.2.14",
     "expo-status-bar": "~2.2.3",
     "expo-task-manager": "~13.1.5",
+    "expo-updates": "~0.28.17",
     "haversine-distance": "1.1.1",
     "prop-types": "15.8.1",
     "qs": "6.11.2",

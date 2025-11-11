@@ -124,7 +124,7 @@ const HomeScreen = ({ navigation }) => {
         <Icon name="list" size={40} color="#fff" />
         <Text style={styles.text}>List Contract</Text>
       </TouchableOpacity>
-      {/* Dummy button for logging local contracts */}
+      {/* Dummy button for logging local contracts 
       <TouchableOpacity
         style={[styles.button, { backgroundColor: '#4CAF50' }]}
         onPress={handleLogContracts}
@@ -133,6 +133,7 @@ const HomeScreen = ({ navigation }) => {
         <Icon name="database" size={40} color="#fff" />
         <Text style={styles.text}>{loggingContracts ? 'Logging...' : 'Log Local Contracts'}</Text>
       </TouchableOpacity>
+      */}
       {/* Dummy button for resetting local database */}
       <TouchableOpacity
         style={[styles.button, { backgroundColor: '#f44336' }]}
