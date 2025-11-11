@@ -44,6 +44,13 @@ const HomeScreen = ({ navigation }) => {
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
             contracts = await Database.getContracts(userName);
+            // Debug: show raw rows
+            try {
+              const raw = await Database.getContractsRaw();
+              console.log('[DEBUG][HomeScreen] raw contracts rows:', raw.length, raw.map(r => ({ id: r.id, employee_name: r.employee_name })));
+            } catch (e) {
+              console.error('[DEBUG][HomeScreen] failed to read raw rows:', e);
+            }
             console.log('[HomeScreen][useFocusEffect] Attempt', retryCount + 1, 'contracts:', contracts.length);
             if (contracts.length > 0) {
               break;

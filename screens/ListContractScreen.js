@@ -117,6 +117,13 @@ const ListContractScreen = ({ navigation }) => {
   console.log('[LOG] Jumlah kontrak dari API:', Array.isArray(apiContracts) ? apiContracts.length : 0);
   // Ambil data lokal
   localContracts = await Database.getContracts(profile.UserName);
+  // Debug: show raw rows
+  try {
+    const raw = await Database.getContractsRaw();
+    console.log('[DEBUG][ListContractScreen] raw contracts rows after fetch:', raw.length, raw.map(r => ({ id: r.id, employee_name: r.employee_name })));
+  } catch (e) {
+    console.error('[DEBUG][ListContractScreen] failed to read raw rows:', e);
+  }
   console.log('[LOG] Jumlah kontrak lokal (setelah online):', Array.isArray(localContracts) ? localContracts.length : 0);
         // Bandingkan dan sync
         let needUpdate = false;
@@ -147,7 +154,8 @@ const ListContractScreen = ({ navigation }) => {
       await loadCheckinsFromStorage();
     } catch (error) {
       console.error('Error fetching contracts:', error);
-      Alert.alert('Error', 'Failed to fetch contracts. Please try again.');
+      const message = error?.message || (error?.response?.Message) || 'Failed to fetch contracts. Please try again.';
+      Alert.alert('Error', message);
     } finally {
       setIsLoadingContracts(false);
     }

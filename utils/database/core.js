@@ -24,17 +24,25 @@ export const initDatabase = async () => {
     await db.execAsync('SELECT 1');
     
     // Check current version
-    const versionResult = await queueOperation(async () => {
-      const result = await db.getFirstAsync(
-        'SELECT value FROM metadata WHERE key = ?',
-        ['db_version']
-      );
-      return result;
-    }, 'Get database version');
+    let currentVersion = 0;
+    try {
+      const versionResult = await queueOperation(async () => {
+        const result = await db.getFirstAsync(
+          'SELECT value FROM metadata WHERE key = ?',
+          ['db_version']
+        );
+        return result;
+      }, 'Get database version');
 
-    const currentVersion = versionResult ? parseInt(versionResult.value, 10) : 0;
+      currentVersion = versionResult ? parseInt(versionResult.value, 10) : 0;
+    } catch (versionErr) {
+      // If reading db_version failed (likely metadata table missing),
+      // assume fresh DB and set currentVersion = 0 so migration will run.
+      logDbOperation('init', 'version-check-failed', { error: versionErr });
+      currentVersion = 0;
+    }
 
-    // Migrate if needed
+    // Migrate if needed (or if we couldn't read version)
     if (currentVersion !== DB_CONFIG.version) {
       await migrateDatabase(db, currentVersion, DB_CONFIG.version);
       await queueOperation(async () => {

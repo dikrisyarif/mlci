@@ -13,6 +13,7 @@ export {
     saveContracts, 
     getContracts 
 } from './contracts';
+export { getContractsRaw } from './contracts';
 
 // Check-in operations
 export { 

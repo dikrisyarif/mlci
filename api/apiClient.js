@@ -71,27 +71,53 @@ export const callMitsuiApi = async ({ endpointPath, method, body = {}, _retryDat
   // //console.log('Body sent to backend:', JSON.stringify(cleanedBody));
   // //console.log('========================================');
 
-  const response = await fetch(`${BASE_URL}${endpointPath}`, {
-    method,
-    headers: {
-      Authorization: token,
-      'X-PARTNER-ID': cachedTokenData.ClientId,
-      'X-TIMESTAMP': timestamp,
-      'X-SIGNATURE': signature,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(cleanedBody),
-  });
+  try {
+    const response = await fetch(`${BASE_URL}${endpointPath}`, {
+      method,
+      headers: {
+        Authorization: token,
+        'X-PARTNER-ID': cachedTokenData.ClientId,
+        'X-TIMESTAMP': timestamp,
+        'X-SIGNATURE': signature,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(cleanedBody),
+    });
 
-  if (response.status === 401 && !_retryData) {
-    //console.warn('[Mitsui] Unauthorized. Retrying once with refreshed token...');
-    cachedTokenData = await getAccessTokenFromMitsui();
-    // Retry dengan _retryData agar signature dan timestamp tetap sama
-    return callMitsuiApi({ endpointPath, method, body, _retryData: { timestamp, signature } });
+    if (response.status === 401 && !_retryData) {
+      //console.warn('[Mitsui] Unauthorized. Retrying once with refreshed token...');
+      cachedTokenData = await getAccessTokenFromMitsui();
+      // Retry dengan _retryData agar signature dan timestamp tetap sama
+      return callMitsuiApi({ endpointPath, method, body, _retryData: { timestamp, signature } });
+    }
+
+    const text = await response.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      json = { raw: text };
+    }
+
+    if (!response.ok) {
+      console.error('[apiClient] HTTP Error', {
+        endpointPath,
+        method,
+        status: response.status,
+        body: json,
+      });
+      const err = new Error('HTTP ' + response.status + ' - ' + (json?.Message || JSON.stringify(json)));
+      err.status = response.status;
+      err.response = json;
+      throw err;
+    }
+
+    return json;
+  } catch (error) {
+    // Network or parsing error
+    console.error('[apiClient] Network/Fetch error', { endpointPath, method, body: cleanedBody, message: error?.message, stack: error?.stack });
+    throw error;
   }
-
-  const json = await response.json();
-  return json;
 };
 
 const removeUndefined = (obj) => {

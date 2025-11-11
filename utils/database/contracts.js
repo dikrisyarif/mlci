@@ -84,3 +84,19 @@ export const getContracts = async (employeeName) => {
     return [];
   }
 };
+
+// Debug helper: return raw rows from contracts table
+export const getContractsRaw = async () => {
+  try {
+    const db = await getDb();
+    if (!db || !db.getAllAsync) {
+      console.error('[Database] DB instance not ready (getContractsRaw):', { db });
+      return [];
+    }
+    const rows = await db.getAllAsync('SELECT id, contract_data, employee_name FROM contracts;');
+    return rows || [];
+  } catch (error) {
+    console.error('[Database] Error getting raw contracts rows:', error);
+    return [];
+  }
+};
