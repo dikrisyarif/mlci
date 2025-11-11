@@ -6,11 +6,11 @@ export const generateMitsuiSignature = (method, endpointPath, accessToken, times
 
   const stringToSign = `${method}:${endpointPath}:${accessToken}:${hashedBody}:${timestamp}`;
 
-  console.log('==== DEBUG Signature ====');
-  console.log('JSON Body:', jsonBody);
-  console.log('SHA-256 Hex:', hashedBody);
-  console.log('StringToSign:', stringToSign);
-  console.log('==========================');
+  // //console.log('==== DEBUG Signature ====');
+  // //console.log('JSON Body:', jsonBody);
+  // //console.log('SHA-256 Hex:', hashedBody);
+  // //console.log('StringToSign:', stringToSign);
+  // //console.log('==========================');
 
   // Pastikan clientSecret diambil dari environment variable di pemanggil, bukan hardcoded di sini
   const signature = CryptoJS.HmacSHA512(stringToSign, clientSecret).toString(CryptoJS.enc.Hex);

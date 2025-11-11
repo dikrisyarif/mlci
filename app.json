@@ -2,14 +2,14 @@
   "expo": {
     "name": "mlcitrack",
     "slug": "mlcitracking",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/MLCI.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
+      "image": "./assets/32MLCI.png",
+      "resizeMode": "cover",
       "backgroundColor": "#ffffff"
     },
     "ios": {
@@ -17,14 +17,26 @@
     },
     "android": {
       "package": "com.mlcitracking.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/MLCI.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAi96bEh-BLkvgQvneWfbP27Ob_FVHjQJY"
+        }
+      }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/MLCI.png"
     },
     "extra": {
       "GOOGLE_MAPS_APIKEY": "AIzaSyAi96bEh-BLkvgQvneWfbP27Ob_FVHjQJY",
@@ -33,6 +45,10 @@
       "eas": {
         "projectId": "39b29cbb-bcd4-46a7-b3e5-23b47145ae9c"
       }
-    }
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-sqlite"
+    ]
   }
 }

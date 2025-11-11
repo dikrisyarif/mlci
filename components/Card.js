@@ -35,7 +35,8 @@ const Card = ({
   };
 
   const handleConfirm = () => {
-    setIsChecked(true);
+    // We don't set isChecked here anymore because it will be set by the parent
+    // when the check-in is actually successful
     setModalVisible(false);
     setCommentModalVisible(true);
   };

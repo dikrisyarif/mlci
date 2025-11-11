@@ -11,7 +11,6 @@ import HomeScreen from '../screens/HomeScreen';
 import HistoryScreen from '../screens/HistoryScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import DetailScreen from '../components/DetailScreen';
-import CheckInScreen from '../screens/CheckInScreen';
 import ListContractScreen from '../screens/ListContractScreen';
 import MapTrackingScreen from '../screens/MapTrackingScreen';
 
@@ -25,13 +24,16 @@ const TabNavigator = () => {
         headerShown: false,
         tabBarIcon: ({ color, size }) => {
           let iconName;
+          const routeName = route?.name || '';
 
-          if (route.name === 'Home') {
+          if (routeName === 'Home') {
             iconName = 'home';
-          } else if (route.name === 'History') {
+          } else if (routeName === 'History') {
             iconName = 'history';
-          } else if (route.name === 'Profile') {
+          } else if (routeName === 'Profile') {
             iconName = 'user';
+          } else {
+            iconName = 'question'; // fallback icon
           }
 
           return <Icon name={iconName} size={size} color={color} />;
@@ -56,7 +58,6 @@ const AppNavigator = () => {
         options={{ headerShown: false }}
       />
       <Stack.Screen name="Detail Kontrak" component={DetailScreen} />
-      <Stack.Screen name="CheckIn" component={CheckInScreen} options={{ headerShown: false }}/>
       <Stack.Screen name="ListContract" component={ListContractScreen} options={{ headerShown: false }}/>
       <Stack.Screen name="MapTrackingScreen" component={MapTrackingScreen} />
     </Stack.Navigator>

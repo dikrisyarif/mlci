@@ -7,7 +7,7 @@ const CommentModal = ({ visible, onClose, onSubmit }) => {
   const scaleAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // console.log("Comment Modal Visibility:", visible); // Log untuk memantau status modal
+    // //console.log("Comment Modal Visibility:", visible); // Log untuk memantau status modal
     if (visible) {
       Animated.spring(scaleAnim, {
         toValue: 1,

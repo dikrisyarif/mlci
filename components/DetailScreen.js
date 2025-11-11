@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,Platfor
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import CommentModal from '../components/CommentModal';
+import MultiImageUploader from './MultiImageUploader'; // Import komponen upload foto
 import { updateCheckin, updateComment } from '../api/listApi';
 import { useAuth } from '../context/AuthContext';
 
@@ -34,6 +35,7 @@ const DetailScreen = ({ route, navigation }) => {
   const [commentModalVisible, setCommentModalVisible] = useState(false);
   const [comment, setComment] = useState(Comment || '');
   const [loading, setLoading] = useState(false);
+  const [selectedImages, setSelectedImages] = useState([]); // State untuk foto
 
   // Helper untuk dapatkan tanggal ISO string
   function getIsoDateString() {
@@ -60,6 +62,24 @@ const DetailScreen = ({ route, navigation }) => {
         setLoading(false);
       }
     }
+  };
+
+  const formatRupiah = (angka) => {
+    if (!angka) return '-';
+    const num = typeof angka === 'number' ? angka : parseFloat(angka.toString().replace(/[^\d]/g, ''));
+    if (isNaN(num)) return '-';
+    return 'IDR ' + num.toLocaleString('id-ID') + ',-';
+  };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return date.toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
   };
 
   const renderRow = (label, value) => (
@@ -91,10 +111,10 @@ const DetailScreen = ({ route, navigation }) => {
           {renderRow('Plat No.', PoliceNo)}
           {renderRow('Equip Type', EquipType)}
           {renderRow('Unit', Unit)}
-          {renderRow('Amount OD', AmountOd)}
+          {renderRow('Amount OD', formatRupiah(AmountOd))}
           {renderRow('Overdue', Overdue)}
-          {renderRow('Jadwal Jatuh Tempo', DueDate)}
-          {LastCallDate && renderRow('Last Call', LastCallDate)}
+          {renderRow('Jadwal Jatuh Tempo', formatDate(DueDate))}
+          {LastCallDate && renderRow('Last Call', formatDate(LastCallDate))}
           {LastCallName && renderRow('Last Call Name', LastCallName)}
           {LastNote && renderRow('Last Note', LastNote)}
 
@@ -112,6 +132,12 @@ const DetailScreen = ({ route, navigation }) => {
               )}
             </View>
           </View>
+
+          {/* Komponen upload foto */}
+          {/* <View style={{ marginTop: 20 }}>
+            <Text style={styles.label}>Upload Foto</Text>
+            <MultiImageUploader leaseNo={LeaseNo} />
+          </View> */}
         </View> 
         <CommentModal
           visible={commentModalVisible}
@@ -177,26 +203,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
   },
-  // commentInput: {
-  //   borderWidth: 1,
-  //   borderColor: '#ccc',
-  //   borderRadius: 10,
-  //   padding: 10,
-  //   marginTop: 8,
-  //   fontSize: 14,
-  //   minHeight: 60,
-  //   backgroundColor: '#f9f9f9',
-  // },
-  // button: {
-  //   backgroundColor: '#007bff',
-  //   padding: 12,
-  //   borderRadius: 6,
-  //   alignItems: 'center',
-  // },
-  // buttonText: {
-  //   color: '#fff',
-  //   fontWeight: 'bold',
-  // },
+  commentDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  commentText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#555',
+  },
 });
 
 export default DetailScreen;

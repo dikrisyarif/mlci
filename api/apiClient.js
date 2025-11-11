@@ -1,11 +1,20 @@
 import { getAccessTokenFromMitsui } from './authApi';
 import { generateMitsuiSignature } from '../utils/signatureHelper';
 import Constants from 'expo-constants';
+import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BASE_URL = 'https://betaapi.mitsuilease.co.id:4151';
+const MITSUI_CLIENT_SECRET = Constants.expoConfig?.extra?.MITSUI_CLIENT_SECRET || process.env.MITSUI_CLIENT_SECRET;
 let cachedTokenData = null;
 
-const MITSUI_CLIENT_SECRET = Constants.expoConfig?.extra?.MITSUI_CLIENT_SECRET || process.env.MITSUI_CLIENT_SECRET;
+const axiosInstance = axios.create({
+  baseURL: BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  timeout: 10000, // 10 seconds timeout
+});
 
 function isTokenExpired(tokenData) {
   if (!tokenData?.ValidTo) return true;
@@ -35,32 +44,32 @@ export const callMitsuiApi = async ({ endpointPath, method, body = {}, _retryDat
     clientSecret
   );
 
-  console.log('==== API REQUEST ====');
-  console.log('Endpoint:', endpointPath);
-  console.log('Method:', method);
-  console.log('Token (short):', token.slice(0, 30) + '...');
-  console.log('X-TIMESTAMP:', timestamp);
-  console.log('Body:', cleanedBody);
-  console.log('======================');
+  // //console.log('==== API REQUEST ====');
+  // //console.log('Endpoint:', endpointPath);
+  // //console.log('Method:', method);
+  // //console.log('Token (short):', token.slice(0, 30) + '...');
+  // //console.log('X-TIMESTAMP:', timestamp);
+  // //console.log('Body:', cleanedBody);
+  // //console.log('======================');
 
-  console.log('==== API REQUEST FULL DETAIL ====');
-  console.log('Endpoint:', endpointPath);
-  console.log('Method:', method);
-  console.log('Headers:', {
-    Authorization: token,
-    'X-PARTNER-ID': cachedTokenData.ClientId,
-    'X-TIMESTAMP': timestamp,
-    'X-SIGNATURE': signature,
-    'Content-Type': 'application/json',
-  });
-  console.log('Body:', JSON.stringify(cleanedBody));
-  console.log('==============================');
+  // //console.log('==== API REQUEST FULL DETAIL ====');
+  // //console.log('Endpoint:', endpointPath);
+  // //console.log('Method:', method);
+  // //console.log('Headers:', {
+  //   Authorization: token,
+  //   'X-PARTNER-ID': cachedTokenData.ClientId,
+  //   'X-TIMESTAMP': timestamp,
+  //   'X-SIGNATURE': signature,
+  //   'Content-Type': 'application/json',
+  // });
+  // //console.log('Body:', JSON.stringify(cleanedBody));
+  // //console.log('==============================');
 
   const minifiedBodyForSignature = JSON.stringify(cleanedBody);
-  console.log('==== DEBUG BODY SIGNATURE VS REQUEST ====');
-  console.log('Minified body for signature:', minifiedBodyForSignature);
-  console.log('Body sent to backend:', JSON.stringify(cleanedBody));
-  console.log('========================================');
+  // //console.log('==== DEBUG BODY SIGNATURE VS REQUEST ====');
+  // //console.log('Minified body for signature:', minifiedBodyForSignature);
+  // //console.log('Body sent to backend:', JSON.stringify(cleanedBody));
+  // //console.log('========================================');
 
   const response = await fetch(`${BASE_URL}${endpointPath}`, {
     method,
@@ -75,7 +84,7 @@ export const callMitsuiApi = async ({ endpointPath, method, body = {}, _retryDat
   });
 
   if (response.status === 401 && !_retryData) {
-    console.warn('[Mitsui] Unauthorized. Retrying once with refreshed token...');
+    //console.warn('[Mitsui] Unauthorized. Retrying once with refreshed token...');
     cachedTokenData = await getAccessTokenFromMitsui();
     // Retry dengan _retryData agar signature dan timestamp tetap sama
     return callMitsuiApi({ endpointPath, method, body, _retryData: { timestamp, signature } });
@@ -90,3 +99,16 @@ const removeUndefined = (obj) => {
     Object.entries(obj).filter(([_, v]) => v !== undefined && v !== null)
   );
 };
+
+export const post = async (endpointPath, body) => {
+  try {
+    const response = await axiosInstance.post(endpointPath, body);
+    return response.data;
+  } catch (error) {
+    console.error('API Error:', error);
+    throw error;
+  }
+};
+
+// Export axios instance as apiClient
+export const apiClient = axiosInstance;

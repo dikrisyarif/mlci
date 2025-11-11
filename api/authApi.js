@@ -10,7 +10,7 @@ export const getAccessTokenFromMitsui = async () => {
   formBody.append('ClientSecret', MITSUI_CLIENT_SECRET);
 
 const localRequestTime = new Date();
-console.log('[Mitsui] Requesting access token...');
+// //console.log('[Mitsui] Requesting access token...');
   const response = await fetch(
     'https://betaapi.mitsuilease.co.id:4200/oauth/v1/auth/accesstoken?GrantType=client_credentials',
     {
@@ -23,7 +23,7 @@ console.log('[Mitsui] Requesting access token...');
   );
 
   const json = await response.json();
-    console.log('[Mitsui] Access Token Response:', json);
+    // //console.log('[Mitsui] Access Token Response:', json);
   if (!json.Data) throw new Error('Failed to get Mitsui access token');
 
   return {

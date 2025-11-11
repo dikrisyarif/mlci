@@ -1,9 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, ActivityIndicator, StyleSheet, TouchableOpacity, Alert, AppState, Modal, Text } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Alert, AppState, Modal, Text } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import haversine from 'haversine-distance';
 import * as FileSystem from 'expo-file-system';
@@ -11,19 +10,34 @@ import * as Sharing from 'expo-sharing';
 import { useMap } from '../context/MapContext';
 import { useTheme } from '../context/ThemeContext';
 import { GOOGLE_MAPS_APIKEY } from '../config/config';
+import { fetchGetRecord, saveCheckinToServer } from '../api/listApi';
+import { useAuth } from '../context/AuthContext';
+import GlobalLoading from '../components/GlobalLoading';
 
 const MapTrackingScreen = () => {
   const { colors } = useTheme();
   const { checkinLocations, clearCheckins } = useMap();
+  const { state } = useAuth();
+  const profile = state.userInfo || {};
 
   const [trackingRoute, setTrackingRoute] = useState([]);
-  const [filteredRoute, setFilteredRoute] = useState([]);
   const [optimizedRoute, setOptimizedRoute] = useState([]);
-  const [selectedDate, setSelectedDate] = useState(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState(null);
+  const [renderError, setRenderError] = useState(null);
+  const [markers, setMarkers] = useState([]);
   const appState = useRef(AppState.currentState);
+
+  // Helper: format date ke string lokal WIB (GMT+7), bulat detik
+  const getLocalWIBDateString = (date = new Date()) => {
+    // WIB = UTC+7
+    const wibOffset = 7 * 60; // in minutes
+    const local = new Date(date.getTime() + (wibOffset - date.getTimezoneOffset()) * 60000);
+    // Bulatkan ke detik (hilangkan milidetik)
+    local.setMilliseconds(0);
+    const pad = n => n.toString().padStart(2, '0');
+    return `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`;
+  };
 
   const logLocation = async () => {
     try {
@@ -31,27 +45,60 @@ const MapTrackingScreen = () => {
       if (status !== 'granted') return;
 
       const location = await Location.getCurrentPositionAsync({});
+      // Timestamp bulat detik
+      const now = new Date();
+      now.setMilliseconds(0);
       const newLog = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        timestamp: new Date().toISOString(),
+        timestamp: getLocalWIBDateString(now), // sudah bulat detik
       };
 
       const existing = JSON.parse(await AsyncStorage.getItem('locationLogs') || '[]');
       const updated = [...existing, newLog];
       await AsyncStorage.setItem('locationLogs', JSON.stringify(updated));
       setTrackingRoute(updated);
+
+      // Cek duplikasi dan interval sebelum insert ke DB
+      if (profile?.UserName) {
+        const lastSentKey = `lastTrackingSent_${profile.UserName}`;
+        const lastSentStr = await AsyncStorage.getItem(lastSentKey);
+        let isDuplicate = false;
+        let isTooSoon = false;
+        if (lastSentStr) {
+          try {
+            const lastSent = JSON.parse(lastSentStr);
+            // Cek timestamp dan koordinat
+            isDuplicate = lastSent && lastSent.timestamp === newLog.timestamp && lastSent.latitude === newLog.latitude && lastSent.longitude === newLog.longitude;
+            // Cek interval minimal 1 menit
+            const lastTime = new Date(lastSent.timestamp);
+            const currTime = new Date(newLog.timestamp);
+            const diffMs = currTime - lastTime;
+            isTooSoon = diffMs < 1 * 60 * 1000; // kurang dari 1 menit
+            // Cek koordinat sama persis
+            if (lastSent.latitude === newLog.latitude && lastSent.longitude === newLog.longitude && isTooSoon) {
+              isDuplicate = true;
+            }
+          } catch {}
+        }
+        if (!isDuplicate && !isTooSoon) {
+          await saveCheckinToServer({
+            EmployeeName: profile.UserName,
+            Lattitude: newLog.latitude,
+            Longtitude: newLog.longitude,
+            CreatedDate: newLog.timestamp, // sudah format lokal WIB, bulat detik
+            tipechekin: 'tracking',
+          });
+          await AsyncStorage.setItem(lastSentKey, JSON.stringify(newLog));
+        } else {
+          //console.log('[TRACKING] Skip insert: duplikat atau <2 menit dari titik sebelumnya');
+        }
+      }
     } catch (err) {
       console.error('Error logging location:', err);
     }
   };
 
-  const filterByDate = (data, date) => {
-    if (!date) return setFilteredRoute(data);
-    const selected = new Date(date).toDateString();
-    const filtered = data.filter(loc => new Date(loc.timestamp).toDateString() === selected);
-    setFilteredRoute(filtered);
-  };
   const deduplicateLocationLogs = async () => {
     try {
       const raw = await AsyncStorage.getItem('locationLogs');
@@ -61,7 +108,7 @@ const MapTrackingScreen = () => {
       Alert.alert('Sukses', `Sebelum: ${logs.length}, Sesudah: ${clean.length}`);
       loadTrackingData();
     } catch (e) {
-      console.log('Dedup gagal:', e);
+      //console.log('Dedup gagal:', e);
     }
   };
 
@@ -69,7 +116,6 @@ const MapTrackingScreen = () => {
     await AsyncStorage.removeItem('locationLogs');
     await clearCheckins();
     setRoute([]);
-    setFilteredRoute([]);
     setOptimizedRoute([]);
   };
   const loadTrackingData = useCallback(async () => {
@@ -78,33 +124,57 @@ const MapTrackingScreen = () => {
       // Filter hanya titik > 200 meter
       const filtered = filterByDistance(raw, 200);
       setTrackingRoute(filtered);
-      filterByDate(filtered, selectedDate);
     } catch (e) {
-      console.log('Error loading locationLogs:', e);
+      //console.log('Error loading locationLogs:', e);
     }
-  }, [selectedDate]);
+  }, []);
 
   useEffect(() => {
     loadTrackingData();
   }, [loadTrackingData]);
 
-  // Run every 5 minutes
+  // Best practice: Remove tracking interval from screen, use global manager for background tracking
+  // Tracking should be started/stopped globally (e.g. via StartEndButton/global context)
+  // Here, only load tracking data for visualization
+  // If you want to refresh data periodically, use a short interval (e.g. 10s) ONLY for UI refresh, not for logging location
   useEffect(() => {
     const interval = setInterval(() => {
-      logLocation();
       loadTrackingData();
-    }, 5 * 60 * 1000);
+    }, 10000); // 10s UI refresh
     return () => clearInterval(interval);
-  }, []);
+  }, [loadTrackingData]);
 
   useEffect(() => {
     if (checkinLocations.length > 0) {
       const combined = [...trackingRoute, ...checkinLocations];
       setTrackingRoute(combined);
-      filterByDate(combined, selectedDate);
       buildOptimizedRoute(combined);
     }
-  }, [checkinLocations, selectedDate]);
+  }, [checkinLocations]);
+
+  // Ambil marker dari server saat screen di-load
+  useEffect(() => {
+    const fetchMarkers = async () => {
+      setLoading(true);
+      try {
+        // Ambil EmployeeName dari context
+        const data = await fetchGetRecord({ EmployeeName: profile.UserName });
+        // //console.log('[MAPVIEW] Data marker dari server:', JSON.stringify(data, null, 2));
+        setMarkers(data);
+      } catch (e) {
+        setMarkers([]);
+      }
+      setLoading(false);
+    };
+    fetchMarkers();
+  }, [profile.UserName]);
+
+  // Update optimizedRoute setiap markers dari server berubah
+  useEffect(() => {
+    if (sortedServerMarkers.length > 1) {
+      buildOptimizedRoute(sortedServerMarkers.map(m => ({ latitude: m.latitude, longitude: m.longitude })));
+    }
+  }, [markers]);
 
   const deduplicatePoints = (data) => {
     return data.reduce((acc, curr) => {
@@ -180,7 +250,7 @@ const MapTrackingScreen = () => {
 
   const onExport = async () => {
     try {
-      const exportData = [...filteredRoute, ...checkinLocations];
+      const exportData = [...trackingRoute, ...checkinLocations];
       const json = JSON.stringify(exportData, null, 2);
       const fileUri = FileSystem.documentDirectory + 'tracking_export.json';
       await FileSystem.writeAsStringAsync(fileUri, json);
@@ -190,23 +260,18 @@ const MapTrackingScreen = () => {
     }
   };
 
-  const onDateChange = (event, date) => {
-    setShowDatePicker(false);
-    if (date) {
-      setSelectedDate(date);
-    }
-  };
-
   // Gabungkan semua marker untuk urutan global berdasarkan timestamp
   const allMarkers = [
-    ...filteredRoute.map((loc, i) => ({
+    ...trackingRoute.map((loc, i) => ({
       ...loc,
-      type: i === 0 ? 'start' : (i === filteredRoute.length - 1 ? 'stop' : 'tracking'),
+      tipechekin: loc.tipechekin, // pastikan tipechekin ikut
+      type: i === 0 ? 'start' : (i === trackingRoute.length - 1 ? 'stop' : 'tracking'),
       index: i,
       source: 'route',
     })),
     ...checkinLocations.map((loc, i) => ({
       ...loc,
+      tipechekin: loc.tipechekin, // pastikan tipechekin ikut
       type: 'checkin',
       source: 'checkin',
     }))
@@ -217,62 +282,102 @@ const MapTrackingScreen = () => {
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     .map((m, idx) => ({ ...m, order: idx + 1 }));
 
-  // Helper untuk dapatkan info marker dari urutan global
-  const getMarkerInfo = (loc, type, extra) => {
-    const found = sortedMarkers.find(m => m.latitude === loc.latitude && m.longitude === loc.longitude && m.timestamp === loc.timestamp && m.type === type);
-    if (!found) return { no: '?', label: '', time: loc.timestamp, contractName: extra?.contractName };
+  // Urutkan marker dari server berdasarkan CheckinDate (createdDate)
+  const sortedServerMarkers = markers
+    .filter(m => m.createdDate && typeof m.latitude === 'number' && typeof m.longitude === 'number' && !isNaN(m.latitude) && !isNaN(m.longitude))
+    .sort((a, b) => new Date(a.createdDate) - new Date(b.createdDate))
+    .map((m, idx) => ({ ...m, order: idx + 1 }));
+
+  // Helper untuk info marker dari server
+  const getMarkerInfo = (loc) => {
+    const found = sortedServerMarkers.find(m => m.latitude === loc.latitude && m.longitude === loc.longitude && m.createdDate === loc.createdDate);
     let label = '';
-    if (type === 'start') label = 'Start';
-    else if (type === 'stop') label = 'STOP';
-    else if (type === 'tracking') label = 'Tracking';
-    else if (type === 'checkin') label = extra?.contractName || 'Check-in';
-    return { no: found.order, label, time: found.timestamp, contractName: extra?.contractName };
+    let color = '#007bff';
+    let tipe = loc.tipechekin || loc.type;
+    if (found) {
+      tipe = found.tipechekin || found.type;
+    }
+    if (tipe === 'start') { label = 'Start'; color = '#388e3c'; }
+    else if (tipe === 'stop') { label = 'STOP'; color = '#d32f2f'; }
+    else if (tipe === 'kontrak') { label = 'Kontrak'; color = '#8e24aa'; }
+    else if (tipe === 'tracking') { label = 'Tracking'; color = 'orange'; }
+    return {
+      no: found ? found.order : '?',
+      label,
+      color,
+      time: found ? found.createdDate : loc.createdDate,
+      contractName: found ? found.contractName : loc.contractName
+    };
   };
 
-  const initial = filteredRoute[0] || checkinLocations[0];
+  const initial = trackingRoute[0] || checkinLocations[0];
   const region = initial
     ? { latitude: initial.latitude, longitude: initial.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }
     : { latitude: -6.2, longitude: 106.816666, latitudeDelta: 0.05, longitudeDelta: 0.05 };
 
+  if (!GOOGLE_MAPS_APIKEY) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: 'red', fontSize: 18, textAlign: 'center' }}>
+          GOOGLE_MAPS_APIKEY tidak ditemukan. Cek konfigurasi app.json dan .env.
+        </Text>
+      </View>
+    );
+  }
+
+  // Error boundary wrapper
+  const SafeMapView = (props) => {
+    try {
+      return props.children;
+    } catch (err) {
+      setRenderError(err.message || 'Unknown error');
+      return null;
+    }
+  };
+
+  if (renderError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: 'red', fontSize: 18, textAlign: 'center' }}>
+          Terjadi error saat render Map: {renderError}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
-      {loading && <ActivityIndicator style={{ position: 'absolute', top: '50%', alignSelf: 'center' }} />}
-      <MapView style={StyleSheet.absoluteFillObject} initialRegion={region} showsUserLocation>
-        {filteredRoute.map((loc, i) => {
-          let pinColor = 'yellow';
-          let type = 'tracking';
-          if (i === 0) {
-            pinColor = 'green';
-            type = 'start';
-          } else if (i === filteredRoute.length - 1) {
-            pinColor = 'red';
-            type = 'stop';
-          }
-          const markerInfo = getMarkerInfo(loc, type);
-          return (
-            <Marker
-              key={`track-${i}`}
-              coordinate={loc}
-              pinColor={pinColor}
-              onPress={() => setSelectedMarker(markerInfo)}
-            />
-          );
-        })}
-        {checkinLocations.map((loc, i) => {
-          const markerInfo = getMarkerInfo(loc, 'checkin', { contractName: loc.contractName });
-          return (
-            <Marker
-              key={`checkin-${i}`}
-              coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
-              pinColor="purple"
-              onPress={() => setSelectedMarker(markerInfo)}
-            />
-          );
-        })}
-        {optimizedRoute.length > 1 && (
-          <Polyline coordinates={optimizedRoute} strokeColor="#007AFF" strokeWidth={3} />
-        )}
-      </MapView>
+      <GlobalLoading visible={loading} />
+      <SafeMapView>
+        <MapView style={StyleSheet.absoluteFillObject} initialRegion={region} showsUserLocation>
+          {markers.filter(loc =>
+            typeof loc.latitude === 'number' &&
+            typeof loc.longitude === 'number' &&
+            !isNaN(loc.latitude) &&
+            !isNaN(loc.longitude)
+          ).map((loc, i) => {
+            let pinColor = 'yellow';
+            let markerType = loc.tipechekin || loc.type || 'tracking';
+            if (markerType === 'start') pinColor = 'green';
+            else if (markerType === 'stop') pinColor = 'red';
+            else if (markerType === 'kontrak') pinColor = 'purple';
+            else if (markerType === 'tracking') pinColor = 'orange';
+            const markerInfo = getMarkerInfo(loc);
+            return (
+              <Marker
+                key={`track-${i}`}
+                coordinate={loc}
+                pinColor={pinColor}
+                onPress={() => setSelectedMarker(markerInfo)}
+              />
+            );
+          })}
+          {/* Polyline snap to road/directions */}
+          {optimizedRoute.length > 1 ? (
+            <Polyline coordinates={optimizedRoute} strokeColor="#007AFF" strokeWidth={3} />
+          ) : null}
+        </MapView>
+      </SafeMapView>
 
       {/* Modal info marker */}
       <Modal
@@ -284,11 +389,10 @@ const MapTrackingScreen = () => {
         <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'rgba(0,0,0,0.3)' }}>
           <View style={{ backgroundColor:'#fff', borderRadius:12, padding:24, alignItems:'center', minWidth:220 }}>
             <Text style={{ fontSize:22, fontWeight:'bold', marginBottom:8 }}>No. {selectedMarker?.no}</Text>
-            {selectedMarker?.label === 'Check-in' && selectedMarker?.contractName ? (
-              <Text style={{ fontSize:18, color:'#8e24aa', marginBottom:8 }}>{selectedMarker.contractName}</Text>
-            ) : (
-              <Text style={{ fontSize:18, color:selectedMarker?.label==='STOP'?'#d32f2f':selectedMarker?.label==='Start'?'#388e3c':'#007bff', marginBottom:8 }}>{selectedMarker?.label}</Text>
-            )}
+            <Text style={{ fontSize:18, color:selectedMarker?.color, marginBottom:8 }}>{selectedMarker?.label}</Text>
+            {selectedMarker?.contractName ? (
+              <Text style={{ fontSize:16, color:'#8e24aa', marginBottom:8 }}>{selectedMarker.contractName}</Text>
+            ) : null}
             <Text style={{ fontSize:16 }}>{selectedMarker?.time ? new Date(selectedMarker.time).toLocaleString() : ''}</Text>
             <TouchableOpacity style={{ marginTop:18 }} onPress={() => setSelectedMarker(null)}>
               <Text style={{ color:'#007bff', fontWeight:'bold', fontSize:16 }}>Tutup</Text>
@@ -301,9 +405,6 @@ const MapTrackingScreen = () => {
         <TouchableOpacity onPress={onExport} style={styles.iconButton}>
           <Icon name="file-download" size={24} color={colors.button} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.iconButton}>
-          <Icon name="date-range" size={24} color={colors.button} />
-        </TouchableOpacity>
         <TouchableOpacity onPress={deduplicateLocationLogs} style={[styles.iconButton, { backgroundColor: colors.primary }]}>
           <Icon name="social-distance" size={24} color="white" />
         </TouchableOpacity>
@@ -311,15 +412,6 @@ const MapTrackingScreen = () => {
           <Icon name="delete-forever" size={24} color="white" />
         </TouchableOpacity>
       </View>
-
-      {showDatePicker && (
-        <DateTimePicker
-          value={selectedDate || new Date()}
-          mode="date"
-          display="default"
-          onChange={onDateChange}
-        />
-      )}
     </View>
   );
 };
