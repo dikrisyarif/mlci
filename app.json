@@ -43,8 +43,7 @@
       "MITSUI_CLIENT_SECRET": "+A+4REi6SJYwawiLIRgwwIsd2CI0UmI+qdVKBiX9GyI=",
       "MITSUI_CLIENT_ID": "0jQdTj/Zw9enqHJ9uGVoBk530BsfAM/AXNj3yLCJgmE=",
       "eas": {
-        "projectId": "39b29cbb-bcd4-46a7-b3e5-23b47145ae9c"
-      }
+          "projectId": "42fcace2-c496-4fda-8ff6-a4ec643e7f30"      }
     },
     "plugins": [
       "expo-asset",
