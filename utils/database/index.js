@@ -1,5 +1,6 @@
 // Core database functionality
-export { initDatabase, getDb, resetDatabase } from './core';
+export { initDatabase, getDb } from './core';
+export { resetDatabase } from './reset';
 
 // Tracking operations
 export { 

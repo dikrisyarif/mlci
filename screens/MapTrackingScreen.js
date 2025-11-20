@@ -95,7 +95,7 @@ const MapTrackingScreen = () => {
         }
       }
     } catch (err) {
-      console.error('Error logging location:', err);
+      // console.error('Error logging location:', err);
     }
   };
 

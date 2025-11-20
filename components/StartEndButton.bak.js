@@ -28,31 +28,31 @@ const StartEndButton = ({
   const [loading, setLoading] = useState(false);
 
   // Initialize database
-  useEffect(() => {
-    const initDb = async () => {
-      try {
-        //console.log('[StartEndButton] Resetting and initializing database...');
-        // First reset the database
-        await Database.resetDatabase();
-        //console.log('[StartEndButton] Database reset complete');
+  // useEffect(() => {
+  //   const initDb = async () => {
+  //     try {
+  //       //console.log('[StartEndButton] Resetting and initializing database...');
+  //       // First reset the database
+  //       await Database.resetDatabase();
+  //       //console.log('[StartEndButton] Database reset complete');
         
-        // Then initialize it
-        await Database.initDatabase();
-        //console.log('[StartEndButton] Database initialized');
+  //       // Then initialize it
+  //       await Database.initDatabase();
+  //       //console.log('[StartEndButton] Database initialized');
         
-        // Clear any stored tracking state
-        await AsyncStorage.removeItem('isTracking');
-        await AsyncStorage.removeItem('startTime');
-        await AsyncStorage.removeItem('lastCheckinStartTimestamp');
-        await AsyncStorage.removeItem('lastCheckinStartLoc');
-        //console.log('[StartEndButton] Cleared stored tracking state');
+  //       // Clear any stored tracking state
+  //       await AsyncStorage.removeItem('isTracking');
+  //       await AsyncStorage.removeItem('startTime');
+  //       await AsyncStorage.removeItem('lastCheckinStartTimestamp');
+  //       await AsyncStorage.removeItem('lastCheckinStartLoc');
+  //       //console.log('[StartEndButton] Cleared stored tracking state');
         
-      } catch (error) {
-        console.error('[StartEndButton] Error during database reset:', error);
-      }
-    };
-    initDb();
-  }, []);
+  //     } catch (error) {
+  //       console.error('[StartEndButton] Error during database reset:', error);
+  //     }
+  //   };
+  //   initDb();
+  // }, []);
 
   // Load tracking status from local and sync with server
   useEffect(() => {

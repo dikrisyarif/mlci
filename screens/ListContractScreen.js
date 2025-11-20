@@ -1,54 +1,58 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Alert, BackHandler } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { widthPercentageToDP as wp, heightPercentageToDP as hp } from 'react-native-responsive-screen';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Database from '../utils/database';
+// ListContractScreen.js (FINAL REFACTORED)
+import React, { useState, useEffect } from "react";
+import { View, StyleSheet, Alert, BackHandler } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  widthPercentageToDP as wp,
+  heightPercentageToDP as hp,
+} from "react-native-responsive-screen";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  getContracts as dbGetContracts,
+  saveContracts as dbSaveContracts,
+  getContractsRaw as dbGetContractsRaw,
+} from "../utils/database/contracts";
 
-// Components
-import { HeaderButtons } from '../components/HeaderButtons';
-import { ContractHeader } from '../components/ContractHeader';
-import SeeMoreButton from '../components/SeeMoreButton';
-import CardList from '../components/CardList';
-import CustomAlert from '../components/CustomAlert';
-import GlobalLoading from '../components/GlobalLoading';
+import { HeaderButtons } from "../components/HeaderButtons";
+import { ContractHeader } from "../components/ContractHeader";
+import SeeMoreButton from "../components/SeeMoreButton";
+import CardList from "../components/CardList";
+import CustomAlert from "../components/CustomAlert";
+import GlobalLoading from "../components/GlobalLoading";
 
-// Hooks & Context
-import { useAuth } from '../context/AuthContext';
-import { useTheme } from '../context/ThemeContext';
-import { useMap } from '../context/MapContext';
-import { useContractCheckIn } from '../hooks/useContractCheckIn';
+import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
+import { useMap } from "../context/MapContext";
+import { useContractCheckIn } from "../hooks/useContractCheckIn";
 
 // Services
-import { ContractService } from '../services/ContractService';
-import * as TrackingService from '../services/trackingService';
+import { ContractService } from "../services/ContractService";
+import SyncEngine from "../services/sync/syncEngine";
+import * as TrackingService from "../services/tracking";
+
+// ===============================
+// NEW → TrackingContext
+// ===============================
+import { useTracking } from "../context/TrackingContext";
 
 const ListContractScreen = ({ navigation }) => {
   const { colors, theme, setTheme } = useTheme();
   const { signOut, state, logout } = useAuth();
   const profile = state.userInfo || {};
-  const { addCheckin, addCheckinLocal, loadCheckinsFromStorage, checkinLocations } = useMap();
-  // Log path database saat screen mount
-  React.useEffect(() => {
-    (async () => {
-      if (Database.getDb) {
-        const db = await Database.getDb();
-        if (db && db._db && db._db.filename) {
-          console.log('[DEBUG][ListContractScreen] DB path:', db._db.filename);
-        } else if (db && db.filename) {
-          console.log('[DEBUG][ListContractScreen] DB path:', db.filename);
-        } else {
-          console.log('[DEBUG][ListContractScreen] DB path: [unknown]');
-        }
-      }
-    })();
-  }, []);
-  
-  // Custom hooks
+
+  const {
+    addCheckin,
+    addCheckinLocal,
+    loadCheckinsFromStorage,
+    checkinLocations,
+  } = useMap();
+
+  const { isStarted, setIsStarted } = useTracking();
+
   const { isLoading, handleCheckin } = useContractCheckIn(
-    profile, 
-    addCheckin, 
-    addCheckinLocal, 
+    profile,
+    addCheckin,
+    addCheckinLocal,
     () => fetchContracts(),
     logout
   );
@@ -56,107 +60,90 @@ const ListContractScreen = ({ navigation }) => {
   const [selectedId, setSelectedId] = useState(null);
   const [comments, setComments] = useState({});
   const [visibleCount, setVisibleCount] = useState(4);
-  const [isStarted, setIsStarted] = useState(false);
-  const [isAlertVisible, setAlertVisible] = useState(false);
   const [contracts, setContracts] = useState([]);
-  // Log jumlah kontrak setiap kali contracts berubah
-  useEffect(() => {
-    console.log('[LOG] STATE contracts berubah, jumlah:', Array.isArray(contracts) ? contracts.length : 0);
-  }, [contracts]);
   const [isLoadingContracts, setIsLoadingContracts] = useState(false);
+  const [isAlertVisible, setAlertVisible] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
 
-  // Initialize database when component mounts
-  // Database sudah diinisialisasi di App.js, tidak perlu init ulang di sini
-
-  // Blok navigasi back selama loading kontrak
-  useEffect(() => {
-    const backAction = () => {
-      if (isLoadingContracts) {
-        Alert.alert('Tunggu', 'Sedang mengambil data kontrak, mohon tunggu hingga selesai.');
-        return true;
-      }
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        setAlertVisible(true);
-      }
-      return true;
-    };
-
-  const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
-  return () => backHandler.remove();
-  }, [navigation, isLoadingContracts]);
-
-  useEffect(() => {
-    AsyncStorage.setItem('comments', JSON.stringify(comments));
-  }, [comments]);
-
+  // ============================================================
+  // Load saved comments
+  // ============================================================
   useEffect(() => {
     const loadComments = async () => {
-      const saved = await AsyncStorage.getItem('comments');
-      if (saved) {
-        setComments(JSON.parse(saved));
-      }
+      const saved = await AsyncStorage.getItem("comments");
+      if (saved) setComments(JSON.parse(saved));
     };
     loadComments();
   }, []);
 
-  // Perbaikan: fetch dari API, bandingkan dan sync ke lokal, fallback ke lokal jika offline
-  const fetchContracts = async () => {
-  setIsLoadingContracts(true);
-  console.log('[LOG] fetchContracts dipanggil');
-    try {
-  const netInfo = await import('@react-native-community/netinfo');
-  const connection = await netInfo.default.fetch();
-  let apiContracts = [];
-  let localContracts = [];
-  console.log('[LOG] Koneksi:', connection.isConnected ? 'ONLINE' : 'OFFLINE');
-  if (connection.isConnected) {
-        // Fetch dari API
-  apiContracts = await ContractService.fetchContracts(profile, addCheckinLocal, checkinLocations);
-  console.log('[LOG] Jumlah kontrak dari API:', Array.isArray(apiContracts) ? apiContracts.length : 0);
-  // Ambil data lokal
-  localContracts = await Database.getContracts(profile.UserName);
-  // Debug: show raw rows
-  try {
-    const raw = await Database.getContractsRaw();
-    console.log('[DEBUG][ListContractScreen] raw contracts rows after fetch:', raw.length, raw.map(r => ({ id: r.id, employee_name: r.employee_name })));
-  } catch (e) {
-    console.error('[DEBUG][ListContractScreen] failed to read raw rows:', e);
-  }
-  console.log('[LOG] Jumlah kontrak lokal (setelah online):', Array.isArray(localContracts) ? localContracts.length : 0);
-        // Bandingkan dan sync
-        let needUpdate = false;
-        if (!localContracts || localContracts.length === 0) {
-          // Insert semua data API ke lokal
-          await Database.saveContracts(apiContracts, profile.UserName);
-          needUpdate = true;
-        } else {
-          // Cek apakah data API berbeda dengan lokal
-          const localJson = JSON.stringify(localContracts);
-          const apiJson = JSON.stringify(apiContracts);
-          if (localJson !== apiJson) {
-            // Timpa data lokal dengan data API
-            await Database.saveContracts(apiContracts, profile.UserName);
-            needUpdate = true;
-          }
-        }
-        // Ambil data terbaru dari lokal
-  const updatedContracts = await Database.getContracts(profile.UserName);
-  console.log('[LOG] Jumlah kontrak yang di-set (ONLINE):', Array.isArray(updatedContracts) ? updatedContracts.length : 0);
-  setContracts(updatedContracts);
-      } else {
-        // Offline: gunakan data lokal
-  localContracts = await Database.getContracts(profile.UserName);
-  console.log('[LOG] Jumlah kontrak lokal (OFFLINE):', Array.isArray(localContracts) ? localContracts.length : 0);
-  setContracts(localContracts);
+  useEffect(() => {
+    AsyncStorage.setItem("comments", JSON.stringify(comments));
+  }, [comments]);
+
+  // ============================================================
+  // Back button block
+  // ============================================================
+  useEffect(() => {
+    const backAction = () => {
+      if (isLoadingContracts) {
+        Alert.alert("Tunggu", "Sedang mengambil data kontrak...");
+        return true;
       }
+      if (navigation.canGoBack()) navigation.goBack();
+      else setAlertVisible(true);
+      return true;
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction
+    );
+
+    return () => backHandler.remove();
+  }, [navigation, isLoadingContracts]);
+
+  // ============================================================
+  // FETCH CONTRACTS
+  // ============================================================
+  const fetchContracts = async () => {
+    if (isFetching) return;
+
+    setIsFetching(true);
+    setIsLoadingContracts(true);
+
+    try {
+      const netInfo = await import("@react-native-community/netinfo");
+      const connection = await netInfo.default.fetch();
+
+      let apiContracts = [];
+      let localContracts = [];
+
+      if (connection.isConnected) {
+        apiContracts = await ContractService.fetchContracts(
+          profile,
+          addCheckinLocal,
+          checkinLocations
+        );
+
+        localContracts = await dbGetContracts(profile.UserName);
+
+        if (JSON.stringify(localContracts) !== JSON.stringify(apiContracts)) {
+          await dbSaveContracts(apiContracts, profile.UserName);
+        }
+
+        const updated = await dbGetContracts(profile.UserName);
+        setContracts(updated);
+      } else {
+        localContracts = await dbGetContracts(profile.UserName);
+        setContracts(localContracts);
+      }
+
       await loadCheckinsFromStorage();
     } catch (error) {
-      console.error('Error fetching contracts:', error);
-      const message = error?.message || (error?.response?.Message) || 'Failed to fetch contracts. Please try again.';
-      Alert.alert('Error', message);
+      // console.error("Error fetching contracts:", error);
+      Alert.alert("Error", "Gagal memuat data kontrak.");
     } finally {
+      setIsFetching(false);
       setIsLoadingContracts(false);
     }
   };
@@ -168,103 +155,119 @@ const ListContractScreen = ({ navigation }) => {
   const handleDetailPress = (item) => {
     const commentText = item.comment?.trim()
       ? item.comment
-      : (comments[item.LeaseNo] || '');
-    navigation.navigate('Detail Kontrak', {
+      : comments[item.LeaseNo] || "";
+
+    navigation.navigate("Detail Kontrak", {
       ...item,
       Comment: commentText,
     });
   };
 
   const handleCommentSubmit = (LeaseNo, newComment) => {
-    setComments(prev => ({ ...prev, [LeaseNo]: newComment }));
-    setContracts(prevContracts => {
-      const updated = prevContracts.map(contract =>
-        contract.LeaseNo === LeaseNo ? { ...contract, comment: newComment } : contract
+    setComments((prev) => ({ ...prev, [LeaseNo]: newComment }));
+
+    setContracts((prevContracts) => {
+      const updated = prevContracts.map((contract) =>
+        contract.LeaseNo === LeaseNo
+          ? { ...contract, comment: newComment }
+          : contract
       );
-      const updatedItem = updated.find(c => c.LeaseNo === LeaseNo);
-      if (updatedItem) {
-        handleCheckin(updatedItem, newComment);
-      }
+
+      const updatedItem = updated.find((c) => c.LeaseNo === LeaseNo);
+      if (updatedItem) handleCheckin(updatedItem, newComment);
+
       return updated;
     });
   };
 
-  const handleSeeMore = () => {
-    setVisibleCount(prev => prev + 4);
-  };
+  const handleSeeMore = () => setVisibleCount((prev) => prev + 4);
 
+  // ============================================================
+  // NEW → Toggle start-stop pakai TrackingContext
+  // ============================================================
   const toggleStartStop = async () => {
     try {
-      const newStatus = await TrackingService.toggleTrackingStatus(profile, isStarted);
-      setIsStarted(newStatus);
-    } catch (error) {
-      console.error('Error toggling tracking status:', error);
-      Alert.alert('Error', 'Failed to toggle tracking status');
+      const newStatus = await TrackingService.toggleTrackingStatus(
+        profile,
+        isStarted
+      );
+      setIsStarted(newStatus); // only update context
+    } catch (err) {
+      // console.error("toggle error", err);
+      Alert.alert("Error", "Failed to toggle tracking status.");
     }
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem('userToken');
+    await AsyncStorage.removeItem("userToken");
     signOut();
-    navigation.navigate('LoginScreen');
+    navigation.navigate("LoginScreen");
   };
 
-  // Load and sync tracking status
+  // ============================================================
+  // FOCUS → Fetch contracts only (no tracking check!)
+  // ============================================================
   useEffect(() => {
-    const loadTrackingStatus = async () => {
-      try {
-        const status = await TrackingService.loadTrackingStatus(profile);
-        setIsStarted(status);
-      } catch (error) {
-        console.error('Error loading tracking status:', error);
-      }
-    };
-    
-    loadTrackingStatus();
-  }, [profile?.UserName]);
+    const unsubscribe = navigation.addListener("focus", async () => {
+      console.log("[FOCUS] ListContractScreen");
 
-  // Load offline check-ins when screen is focused
-  useEffect(() => {
-    const loadOfflineData = async () => {
+      const token = await AsyncStorage.getItem("userToken");
+      if (!token) {
+        setTimeout(() => {
+          if (!isFetching) fetchContracts();
+        }, 1200);
+      } else {
+        fetchContracts();
+      }
+
+      // offline checkins load
       try {
         const offlineCheckins = await ContractService.getUnuploadedCheckins();
-        
-        // Add offline check-ins to MapContext
-        offlineCheckins.forEach(checkin => {
-          const checkinLocation = {
+        offlineCheckins.forEach((checkin) => {
+          addCheckinLocal({
             contractId: checkin.lease_no,
             contractName: checkin.customer_name,
             remark: checkin.comment,
             latitude: checkin.latitude,
             longitude: checkin.longitude,
             timestamp: checkin.timestamp,
-            tipechekin: 'kontrak',
-            isOffline: true
-          };
-          addCheckinLocal(checkinLocation);
+            tipechekin: "kontrak",
+            isOffline: true,
+          });
         });
-      } catch (error) {
-        console.error('Error loading offline check-ins:', error);
+      } catch (err) {
+        // console.error("offline checkin load error:", err);
       }
-    };
-
-    const unsubscribe = navigation.addListener('focus', () => {
-  console.log('[LOG] NAVIGATION FOCUS: ListContractScreen');
-  fetchContracts();
-  loadOfflineData();
     });
+
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, profile?.UserName]);
+
+  // ============================================================
+  // Sync All
+  // ============================================================
+  const handleSyncAll = async () => {
+    try {
+      await SyncEngine.syncCheckins();
+      await fetchContracts();
+    } catch (err) {
+      // console.error("[SYNC ALL] Error:", err);
+      Alert.alert("Error", "Gagal melakukan sync.");
+    }
+  };
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={{ flex: 1 }} edges={["top", "left", "right"]}>
       <GlobalLoading visible={isLoading || isLoadingContracts} />
+
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <HeaderButtons
-          isStarted={isStarted}
+          isStarted={isStarted} // from TrackingContext
           onStartStopPress={toggleStartStop}
-          onMapPress={() => navigation.navigate('MapTrackingScreen')}
-          onThemeToggle={() => setTheme(prev => (prev === 'light' ? 'dark' : 'light'))}
+          onMapPress={() => navigation.navigate("MapTrackingScreen")}
+          onThemeToggle={() =>
+            setTheme((prev) => (prev === "light" ? "dark" : "light"))
+          }
           theme={theme}
           colors={colors}
           checkinLocations={checkinLocations}
@@ -273,7 +276,7 @@ const ListContractScreen = ({ navigation }) => {
 
         <ContractHeader
           contractCount={contracts.length}
-          onSyncPress={fetchContracts}
+          onSyncPress={handleSyncAll}
           colors={colors}
         />
 
@@ -284,7 +287,7 @@ const ListContractScreen = ({ navigation }) => {
             onCardPress={handleCardPress}
             onDetailPress={handleDetailPress}
             onCommentSubmit={handleCommentSubmit}
-            isStarted={isStarted}
+            isStarted={isStarted} // from context
           />
         </View>
 
@@ -292,7 +295,7 @@ const ListContractScreen = ({ navigation }) => {
           <SeeMoreButton onPress={handleSeeMore} />
         )}
 
-        <CustomAlert 
+        <CustomAlert
           visible={isAlertVisible}
           onClose={() => setAlertVisible(false)}
           onConfirm={handleLogout}
@@ -306,15 +309,15 @@ const ListContractScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'flex-start',
-    width: '100%',
-    paddingTop: hp('5%'),
-    paddingBottom: hp('5%'),
+    justifyContent: "flex-start",
+    width: "100%",
+    paddingTop: hp("5%"),
+    paddingBottom: hp("5%"),
   },
   cardListContainer: {
     flex: 1,
-    paddingHorizontal: wp('5%'),
-  }
+    paddingHorizontal: wp("5%"),
+  },
 });
 
 export default ListContractScreen;

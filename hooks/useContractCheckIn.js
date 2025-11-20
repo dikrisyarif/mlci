@@ -14,8 +14,8 @@ function getLocalISOString(offsetHours = 7) {
 export const useContractCheckIn = (profile, addCheckin, addCheckinLocal, fetchContracts, logout) => {
   const [isLoading, setIsLoading] = useState(false);
 
+  /** ✅ Kirim ke server (simpan dan update flag) */
   const handleServerUpdate = async (item, location, timestamp, newComment, savedId) => {
-    // First save the check-in location
     const saveResult = await saveCheckinToServer({
       EmployeeName: profile.UserName,
       Lattitude: location.coords.latitude,
@@ -26,15 +26,11 @@ export const useContractCheckIn = (profile, addCheckin, addCheckinLocal, fetchCo
       Comment: newComment
     });
 
-    // Check save result
     if (saveResult?.Status !== 1) {
-      console.error('[ListContract] Save failed:', saveResult);
+      // console.error('[Checkin] Save failed:', saveResult);
       throw new Error(saveResult?.Message || 'Gagal menyimpan check-in ke server');
     }
 
-    //console.log('[ListContract] Save successful, updating check-in status...');
-
-    // Then update the check-in status
     const updateResult = await updateCheckin({
       EmployeeName: profile.UserName,
       LeaseNo: item.LeaseNo,
@@ -44,52 +40,60 @@ export const useContractCheckIn = (profile, addCheckin, addCheckinLocal, fetchCo
       CheckIn: timestamp
     });
 
-    // Check update result
     if (updateResult?.Status !== 1) {
-      console.error('[ListContract] Update failed:', updateResult);
+      // console.error('[Checkin] Update failed:', updateResult);
       throw new Error(updateResult?.Message || 'Gagal mengupdate status check-in');
     }
 
-    // Mark as uploaded in SQLite
+    // ✅ Tandai sebagai sudah di-upload
     await ContractService.markCheckinAsUploaded(savedId);
+
+    // ✅ Update local cache agar tidak bisa dicekin lagi
+    await ContractService.updateLocalContractFlag(item.LeaseNo, {
+      isCheckedIn: true,
+      comment: newComment,
+      CheckIn: timestamp
+    });
+
     return { saveResult, updateResult };
   };
 
+  /** ✅ Main function */
   const handleCheckin = async (item, newComment) => {
     try {
       setIsLoading(true);
 
-      // 0. Check if contract is already checked in
+      // Cegah double check-in
       const isAlreadyCheckedIn = await ContractService.isContractCheckedIn(item.LeaseNo, profile.UserName);
       if (isAlreadyCheckedIn) {
         Alert.alert('Sudah Check-in', `Kontrak ${item.CustName} sudah di-check-in hari ini.`);
         return;
       }
 
-      // 1. Check location permission
+      // Cek izin lokasi
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission denied', 'Lokasi tidak diizinkan');
         return;
       }
 
-      // 2. Get current location
+      // Ambil lokasi
       const location = await Location.getCurrentPositionAsync({});
       const timestamp = getLocalISOString();
 
-      // 3. Prepare check-in data
+      // Siapkan data check-in
       const checkinData = {
         employee_name: profile.UserName,
         lease_no: item.LeaseNo,
         comment: newComment,
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        timestamp: timestamp,
+        timestamp,
         customer_name: item.CustName,
         is_uploaded: 0
       };
 
-      // 4. Save to local SQLite database first
+      // Simpan ke SQLite dulu
       let savedId;
       try {
         savedId = await ContractService.addCheckin(checkinData);
@@ -101,88 +105,57 @@ export const useContractCheckIn = (profile, addCheckin, addCheckinLocal, fetchCo
         throw error;
       }
 
-      // 5. Check internet connection
       const netInfo = await NetInfo.fetch();
-      
-      // 6. Try to upload if online
+
       if (netInfo.isConnected) {
         try {
           await handleServerUpdate(item, location, timestamp, newComment, savedId);
-          
-          // Update UI with new check-in
-          const checkinLocation = {
-            contractId: item.LeaseNo,
-            contractName: item.CustName,
-            remark: newComment,
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude,
-            timestamp: timestamp,
-            tipechekin: 'kontrak',
-          };
-          addCheckin(checkinLocation);
-          
           Alert.alert('Check-in berhasil', `Lokasi disimpan untuk ${item.CustName}.`);
         } catch (error) {
-          console.error('[ListContract] Upload error:', error);
-          Alert.alert(
-            'Penyimpanan Offline',
-            'Server tidak dapat dijangkau. Data disimpan secara offline dan akan disinkronkan nanti.'
-          );
+          // console.error('[Checkin] Upload error:', error);
+          Alert.alert('Penyimpanan Offline', 'Server tidak dapat dijangkau. Data disimpan secara offline.');
         }
       } else {
-        Alert.alert(
-          'Mode Offline',
-          'Tidak ada koneksi internet. Data disimpan secara offline dan akan disinkronkan saat online.'
-        );
+        Alert.alert('Mode Offline', 'Tidak ada koneksi internet. Data disimpan secara offline.');
       }
 
-      // Update local UI regardless of online status
+      // ✅ Update local contract agar langsung reflect di UI
+      await ContractService.updateLocalContractFlag(item.LeaseNo, {
+        isCheckedIn: true,
+        comment: newComment,
+        CheckIn: timestamp
+      });
+
+      // ✅ Update map/local state UI
       const checkinLocation = {
         contractId: item.LeaseNo,
         contractName: item.CustName,
         remark: newComment,
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        timestamp: timestamp,
+        timestamp,
         tipechekin: 'kontrak',
         isOffline: !netInfo.isConnected
       };
+
       addCheckinLocal(checkinLocation);
+      if (netInfo.isConnected) addCheckin(checkinLocation);
 
     } catch (error) {
-      console.error('[ListContract] Check-in error:', error);
+      // console.error('[Checkin] Error:', error);
       if (error?.message?.includes('401')) {
         Alert.alert('Unauthorized', 'Sesi kadaluarsa. Silakan login ulang.');
         logout();
       } else if (error?.message === 'Contract has already been checked in today') {
         Alert.alert('Sudah Check-in', `Kontrak sudah di-check-in hari ini.`);
       } else {
-        Alert.alert(
-          'Check-in gagal', 
-          'Terjadi kesalahan saat check-in lokasi. ' + 
-          (error?.message ? `\n\nDetail: ${error.message}` : '')
-        );
-      }
-
-      // Try to get contract details to verify state
-      try {
-        const checkinDetails = await ContractService.getContractCheckinDetails(
-          item.LeaseNo,
-          profile.UserName
-        );
-        //console.log('[ListContract] Current contract check-in state:', checkinDetails);
-      } catch (e) {
-        console.error('[ListContract] Error getting contract details:', e);
+        Alert.alert('Check-in gagal', 'Terjadi kesalahan saat check-in lokasi.\n\n' + (error?.message || ''));
       }
     } finally {
       setIsLoading(false);
-      // Refresh the contract list to ensure UI is in sync
-      await fetchContracts();
+      await fetchContracts(); // Refresh list biar flag dan comment update
     }
   };
 
-  return {
-    isLoading,
-    handleCheckin
-  };
+  return { isLoading, handleCheckin };
 };

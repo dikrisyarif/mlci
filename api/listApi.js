@@ -1,16 +1,28 @@
-// src/api/listApi.js
 import { callMitsuiApi } from './apiClient';
+import * as Database from '../utils/database/state'; // ✅ untuk offline fallback
 
+/** ==============================
+ *  DETAIL & LIST
+ * ============================== */
 export const fetchListDtl = async ({ EmployeeName = '', LeaseNo = '' }) => {
   const endpointPath = '/common/v1/mobile/get-list-dtl';
   const body = { EmployeeName, LeaseNo };
 
-  const result = await callMitsuiApi({ endpointPath, method: 'POST', body });
-  return result;
+  return await callMitsuiApi({
+    endpointPath,
+    method: 'POST',
+    body,
+    offlineFallback: async () => {
+      console.warn('[fetchListDtl] Offline fallback: return cached data');
+      const cache = await Database.getAppState('listDtlCache');
+      return cache ? JSON.parse(cache) : [];
+    },
+  });
 };
 
-// src/api/listApi.js
-
+/** ==============================
+ *  UPDATE CHECK-IN / COMMENT
+ * ============================== */
 export const updateCheckin = async ({
   EmployeeName,
   LeaseNo,
@@ -24,13 +36,25 @@ export const updateCheckin = async ({
     EmployeeName,
     LeaseNo,
     Comment,
-    Latitude: Latitude.toString(),
-    Longitude: Longitude.toString(),
-    CheckIn: CheckIn, // sudah string lokal
+    Latitude: Latitude?.toString(),
+    Longitude: Longitude?.toString(),
+    CheckIn,
     CreatedDate: new Date().toISOString(),
   };
-  const result = await callMitsuiApi({ endpointPath, method: 'PUT', body });
-  return result;
+
+  return await callMitsuiApi({
+    endpointPath,
+    method: 'PUT',
+    body,
+    offlineFallback: async () => {
+      console.warn('[updateCheckin] Offline fallback: queueing update');
+      await Database.saveAppState(
+        `pending-update-${LeaseNo}`,
+        JSON.stringify(body)
+      );
+      return { Message: 'Saved locally (offline)', Offline: true };
+    },
+  });
 };
 
 export const updateComment = async ({
@@ -46,18 +70,30 @@ export const updateComment = async ({
     Comment,
     CreatedDate: CreatedDate || new Date().toISOString(),
   };
-  //console.log('[ListApi] Mengirim update comment ke server:', body);
+
   try {
-    const result = await callMitsuiApi({ endpointPath, method: 'PUT', body });
-    //console.log('[ListApi] Hasil update comment:', result);
-    return result;
+    return await callMitsuiApi({
+      endpointPath,
+      method: 'PUT',
+      body,
+      offlineFallback: async () => {
+        console.warn('[updateComment] Offline fallback: save local');
+        await Database.saveAppState(
+          `pending-comment-${LeaseNo}`,
+          JSON.stringify(body)
+        );
+        return { Message: 'Comment saved locally (offline)', Offline: true };
+      },
+    });
   } catch (error) {
-    console.error('[ListApi] Error update comment:', error);
+    // console.error('[ListApi] Error update comment:', error);
     throw error;
   }
 };
 
-// Insert check-in (start, stop, tracking, kontrak) ke /common/v1/mobile/save
+/** ==============================
+ *  SAVE CHECK-IN / START / STOP / TRACKING
+ * ============================== */
 export const saveCheckinToServer = async ({
   EmployeeName,
   Lattitude,
@@ -65,90 +101,229 @@ export const saveCheckinToServer = async ({
   CreatedDate,
   Address = '',
   tipechekin = 'tracking',
-  localTimestamp, // tambahkan argumen opsional
+  localTimestamp,
 }) => {
   const endpointPath = '/common/v1/mobile/save';
-  // Gunakan localTimestamp jika ada, jika tidak pakai CreatedDate
   const finalCreatedDate = localTimestamp || CreatedDate;
+
   let body = {
     EmployeeName,
     Lattitude,
     Longtitude,
     CreatedDate: finalCreatedDate,
-    Address: '', // default kosong
+    Address: '',
     CheckIn: false,
     Start: false,
     Stop: false,
     MockProvider: false,
   };
-  if (tipechekin === 'start') {
-    body.Start = true;
-    body.Address = Address;
-    // CheckIn dan Stop tetap false
-  } else if (tipechekin === 'stop') {
-    body.Stop = true;
-    body.Address = Address;
-    // CheckIn dan Start tetap false
-  } else if (tipechekin === 'kontrak') {
-    body.CheckIn = true;
-    body.Address = Address;
-    // Start dan Stop tetap false
+
+  switch (tipechekin) {
+    case 'start':
+      body.Start = true;
+      body.Address = Address;
+      break;
+    case 'stop':
+      body.Stop = true;
+      body.Address = Address;
+      break;
+    case 'kontrak':
+      body.CheckIn = true;
+      body.Address = Address;
+      break;
   }
-  // tracking: semua false
-  // //console.log('[listApi] Payload ke API saveCheckinToServer:', { endpointPath, body });
-  const result = await callMitsuiApi({ endpointPath, method: 'POST', body });
-  // //console.log('[listApi] Response dari API saveCheckinToServer:', result);
-  return result;
+
+  return await callMitsuiApi({
+    endpointPath,
+    method: 'POST',
+    body,
+    offlineFallback: async () => {
+      console.warn(`[saveCheckinToServer] Offline: queue ${tipechekin}`);
+      const localKey = `pending-${tipechekin}-${finalCreatedDate}`;
+      await Database.saveAppState(localKey, JSON.stringify(body));
+      return { Message: 'Check-in saved locally', Offline: true };
+    },
+  });
 };
 
-// Ambil data marker untuk MapView dari API /common/v1/mobile/get-record
-// Pastikan EmployeeName diambil dari parameter (misal: profile.UserName dari context seperti di ListContractScreen)
+/** ==============================
+ *  GET RECORD / MARKER MAP
+ * ============================== */
 export const fetchGetRecord = async ({ EmployeeName, CreatedDate } = {}) => {
-  // EmployeeName WAJIB dari parameter, fallback ke storage hanya jika tidak ada
-  let employeeName = EmployeeName;
-  if (!employeeName) {
-    // //console.warn('[listApi] fetchGetRecord: EmployeeName is empty! Data tidak akan diambil dari server. Pastikan parameter EmployeeName dikirim dari context (profile.UserName)');
-  }
-  // CreatedDate default: hari ini (ISO string)
-  const createdDate = CreatedDate || new Date().toISOString();
   const endpointPath = '/common/v1/mobile/get-record';
-  const body = { EmployeeName: employeeName, CreatedDate: createdDate };
-  // //console.log('[listApi] Trigger fetchGetRecord:', { endpointPath, body });
+  const createdDate = CreatedDate || new Date().toISOString();
+  const body = { EmployeeName, CreatedDate: createdDate };
+
   try {
-    const result = await callMitsuiApi({ endpointPath, method: 'POST', body });
-    // //console.log('[listApi] Response fetchGetRecord:', result);
-    // Mapping ke format marker MapView
+    const result = await callMitsuiApi({
+      endpointPath,
+      method: 'POST',
+      body,
+      offlineFallback: async () => {
+        console.warn('[fetchGetRecord] Offline: load cached map data');
+        const cache = await Database.getAppState('lastRecordCache');
+        return cache ? JSON.parse(cache) : [];
+      },
+    });
+
     const dataArr = result?.data || result?.Data;
-    if (Array.isArray(dataArr)) {
-      return dataArr.map((item) => ({
-        id: item.Id || item.id || `${item.EmployeeName}-${item.CheckinDate || item.CreatedDate}`,
-        employeeName: item.EmployeeName,
-        leaseNo: item.LeaseNo,
-        contractName: item.CustName || '',
-        latitude: parseFloat(item.Lattitude || item.Latitude),
-        longitude: parseFloat(item.Longtitude || item.Longitude),
-        createdDate: item.CreatedDate || item.CheckinDate,
-        address: item.Address || '',
-        tipechekin: item.tipechekin ||
-          (item.LabelMap === 'Start' ? 'start' : item.LabelMap === 'Stop' ? 'stop' : item.LabelMap === 'Checkin' ? 'kontrak' : (item.Start ? 'start' : item.Stop ? 'stop' : item.CheckIn ? 'kontrak' : 'tracking')),
-        // Tambahan field lain jika perlu
-      }));
-    }
-    return [];
+    if (!Array.isArray(dataArr)) return [];
+
+    // Normalisasi struktur untuk MapView
+    const mapped = dataArr.map((item) => ({
+      id: item.Id || `${item.EmployeeName}-${item.CreatedDate}`,
+      employeeName: item.EmployeeName,
+      leaseNo: item.LeaseNo,
+      contractName: item.CustName || '',
+      latitude: parseFloat(item.Lattitude || item.Latitude),
+      longitude: parseFloat(item.Longtitude || item.Longitude),
+      createdDate: item.CreatedDate,
+      address: item.Address || '',
+      tipechekin:
+        item.tipechekin ||
+        (item.LabelMap === 'Start'
+          ? 'start'
+          : item.LabelMap === 'Stop'
+          ? 'stop'
+          : item.LabelMap === 'Checkin'
+          ? 'kontrak'
+          : item.Start
+          ? 'start'
+          : item.Stop
+          ? 'stop'
+          : item.CheckIn
+          ? 'kontrak'
+          : 'tracking'),
+    }));
+
+    // Simpan cache untuk offline
+    await Database.saveAppState('lastRecordCache', JSON.stringify(mapped));
+
+    return mapped;
   } catch (e) {
-    console.error('[listApi] Error fetchGetRecord:', e);
+    // console.error('[listApi] Error fetchGetRecord:', e);
     return [];
   }
 };
 
-// Mengecek status start/stop dari server
-export const isStartedApi = async ({ EmployeeName, CreatedDate }) => {
+// /** ==============================
+//  *  STATUS START / STOP
+//  * ============================== */
+// export const isStartedApi = async ({ EmployeeName, CreatedDate }) => {
+//   const endpointPath = '/common/v1/mobile/isStarted';
+//   const body = {
+//     EmployeeName,
+//     CreatedDate: CreatedDate || new Date().toISOString(),
+//   };
+
+//   return await callMitsuiApi({
+//     endpointPath,
+//     method: 'POST',
+//     body,
+//     offlineFallback: async () => {
+//       console.warn('[isStartedApi] Offline fallback: read local status');
+//       const localStatus = await Database.getAppState('isTracking');
+//       return { Data: { isStarted: localStatus === 'true' } };
+//     },
+//   });
+// };
+// api/listApi.js
+// -------------------- REPLACE isStartedApi IMPLEMENTATION WITH THIS --------------------
+
+/**
+ * Safe wrapper for isStartedApi:
+ * - serializes concurrent calls (only one call to server at a time)
+ * - caches last response for short duration (CACHE_MS)
+ * - ensures body timestamp is deterministic for callers that pass forceDate (if provided)
+ *
+ * All callers that import isStartedApi from this file will automatically use this safe wrapper.
+ */
+
+const _isStartedState = {
+  lock: false,
+  queue: [], // array of {payload, resolve, reject}
+  lastResponse: null,
+  lastCallTime: 0,
+  CACHE_MS: 3000, // cache for 3 seconds
+  // you can adjust CACHE_MS to be larger if you want fewer calls (e.g. 5000 ms)
+};
+
+async function _callIsStartedServer(payload) {
   const endpointPath = '/common/v1/mobile/isStarted';
   const body = {
-    EmployeeName,
-    CreatedDate: CreatedDate || new Date().toISOString(),
+    EmployeeName: payload.EmployeeName,
+    CreatedDate: payload.CreatedDate || new Date().toISOString(),
   };
-  const result = await callMitsuiApi({ endpointPath, method: 'POST', body });
-  return result;
+
+  // callMitsuiApi is used (it should be exported/available in this file)
+  return await callMitsuiApi({
+    endpointPath,
+    method: 'POST',
+    body,
+    offlineFallback: async () => {
+      console.warn('[isStartedApi] Offline fallback: read local status');
+      const localStatus = await Database.getAppState('isTracking');
+      return { Data: { isStarted: localStatus === 'true' } };
+    },
+  });
+}
+
+/**
+ * Public isStartedApi wrapper.
+ * Usage unchanged: await isStartedApi({ EmployeeName, CreatedDate })
+ */
+export const isStartedApi = async (payload = {}) => {
+  try {
+    // If cached and fresh, return cached value
+    const now = Date.now();
+    if (
+      _isStartedState.lastResponse &&
+      now - _isStartedState.lastCallTime < _isStartedState.CACHE_MS
+    ) {
+      // return a shallow copy to avoid accidental mutation of cached object
+      return JSON.parse(JSON.stringify(_isStartedState.lastResponse));
+    }
+
+    // If a request is ongoing, queue this caller and wait
+    if (_isStartedState.lock) {
+      return await new Promise((resolve, reject) => {
+        _isStartedState.queue.push({ payload, resolve, reject });
+      });
+    }
+
+    // Acquire lock and perform server call
+    _isStartedState.lock = true;
+    try {
+      const serverRes = await _callIsStartedServer(payload);
+
+      // Save cache
+      _isStartedState.lastResponse = serverRes;
+      _isStartedState.lastCallTime = Date.now();
+
+      // Resolve any queued callers with same result
+      while (_isStartedState.queue.length) {
+        const q = _isStartedState.queue.shift();
+        try {
+          q.resolve(JSON.parse(JSON.stringify(serverRes)));
+        } catch (e) {
+          q.reject(e);
+        }
+      }
+
+      return serverRes;
+    } catch (err) {
+      // Reject queued callers
+      while (_isStartedState.queue.length) {
+        const q = _isStartedState.queue.shift();
+        q.reject(err);
+      }
+      throw err;
+    } finally {
+      _isStartedState.lock = false;
+    }
+  } catch (error) {
+    // If anything goes wrong, bubble up the error (callers may fallback)
+    throw error;
+  }
 };
 

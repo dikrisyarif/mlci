@@ -9,62 +9,69 @@ let db = null;
 let operationQueue = Promise.resolve();
 
 // ---------------------------------------------------------------------------
-// ADD ASYNC HELPERS TO DB INSTANCE
+// EXTEND ASYNC HELPERS IF NEEDED
 // ---------------------------------------------------------------------------
-const extendDatabaseWithAsync = (db) => {
-  if (db.execAsync && db.runAsync && db.getAllAsync && db.getFirstAsync) {
-    return db;
+const extendDatabaseWithAsync = (dbInstance) => {
+  if (!dbInstance) return dbInstance;
+
+  const hasExecAsync = typeof dbInstance.execAsync === "function";
+  const hasRunAsync = typeof dbInstance.runAsync === "function";
+  const hasGetAllAsync = typeof dbInstance.getAllAsync === "function";
+  const hasGetFirstAsync = typeof dbInstance.getFirstAsync === "function";
+
+  if (hasExecAsync && hasRunAsync && hasGetAllAsync && hasGetFirstAsync) {
+    return dbInstance;
   }
 
-  db.execAsync = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      try {
-        db.exec(sql, params, (err, result) => {
-          err ? reject(err) : resolve(result);
+  try {
+    if (!hasExecAsync && typeof dbInstance.exec === "function") {
+      dbInstance.execAsync = (sql, params = []) =>
+        new Promise((resolve, reject) => {
+          dbInstance.exec(sql, params, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+          });
         });
-      } catch (e) {
-        reject(e);
-      }
-    });
+    }
 
-  db.runAsync = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      try {
-        db.run(sql, params, (err) => {
-          err ? reject(err) : resolve();
+    if (!hasRunAsync && typeof dbInstance.run === "function") {
+      dbInstance.runAsync = (sql, params = []) =>
+        new Promise((resolve, reject) => {
+          dbInstance.run(sql, params, (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
         });
-      } catch (e) {
-        reject(e);
-      }
-    });
+    }
 
-  db.getAllAsync = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      try {
-        db.all(sql, params, (err, rows) => {
-          err ? reject(err) : resolve(rows || []);
+    if (!hasGetAllAsync && typeof dbInstance.all === "function") {
+      dbInstance.getAllAsync = (sql, params = []) =>
+        new Promise((resolve, reject) => {
+          dbInstance.all(sql, params, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+          });
         });
-      } catch (e) {
-        reject(e);
-      }
-    });
+    }
 
-  db.getFirstAsync = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      try {
-        db.get(sql, params, (err, row) => {
-          err ? reject(err) : resolve(row);
+    if (!hasGetFirstAsync && typeof dbInstance.get === "function") {
+      dbInstance.getFirstAsync = (sql, params = []) =>
+        new Promise((resolve, reject) => {
+          dbInstance.get(sql, params, (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+          });
         });
-      } catch (e) {
-        reject(e);
-      }
-    });
+    }
+  } catch (err) {
+    console.warn("[DB][extend] Failed to add async wrappers:", err);
+  }
 
-  return db;
+  return dbInstance;
 };
 
 // ---------------------------------------------------------------------------
-// INIT DB — NO SELF-DESTRUCT, SAFE
+// INIT DB (WAL mode, single instance)
 // ---------------------------------------------------------------------------
 export const initDb = async () => {
   try {
@@ -72,30 +79,35 @@ export const initDb = async () => {
       db = await openDatabaseAsync(DB_CONFIG.name);
       db = extendDatabaseWithAsync(db);
 
-      if (db?._db?.filename) {
-        console.log('[DB][initDb] Database path:', db._db.filename);
-      }
+      await db.execAsync("SELECT 1");
 
-      await db.execAsync('SELECT 1');
-
-      // Enable WAL mode (optional)
       try {
-        await db.execAsync('PRAGMA journal_mode = WAL;');
-        await db.execAsync('PRAGMA synchronous = NORMAL;');
+        await db.execAsync("PRAGMA journal_mode = WAL;");
+        await db.execAsync("PRAGMA synchronous = NORMAL;");
       } catch (_) {}
 
-      logDbOperation('init-db', 'completed');
+      logDbOperation("init-db", "completed");
     }
 
     return db;
   } catch (e) {
-    logDbOperation('init-db', 'failed', { error: e });
+    logDbOperation("init-db", "failed", { error: e });
     throw e;
   }
 };
 
 // ---------------------------------------------------------------------------
-// RETRY LOCK HANDLER — NO FORCE CLEANUP
+// GET DB INSTANCE
+// ---------------------------------------------------------------------------
+export const getDb = async () => {
+  if (!db || db._closed) {
+    return initDb();
+  }
+  return db;
+};
+
+// ---------------------------------------------------------------------------
+// SAFE RETRY FOR LOCKED DB
 // ---------------------------------------------------------------------------
 const safeRetry = async (fn, description) => {
   let attempt = 0;
@@ -106,17 +118,14 @@ const safeRetry = async (fn, description) => {
     } catch (error) {
       const msg = String(error?.message || "");
 
-      // SQLite temp lock → retry after small delay
-      if (msg.includes('database is locked')) {
+      if (msg.includes("database is locked")) {
         const delay = 150 + attempt * 150;
-        logDbOperation(description, 'retry-lock', { attempt, delay });
-
+        logDbOperation(description, "retry-lock", { attempt, delay });
         await wait(delay);
         attempt++;
         continue;
       }
 
-      // Other error → throw langsung
       throw error;
     }
   }
@@ -125,81 +134,35 @@ const safeRetry = async (fn, description) => {
 };
 
 // ---------------------------------------------------------------------------
-// GET DB INSTANCE — ALWAYS RETURNS SAME DB
+// QUEUE OPERATION — SERIAL, RETURNS LOCAL PROMISE (FIXED)
 // ---------------------------------------------------------------------------
-export const getDb = async () => {
-  try {
-    if (!db || db._closed) {
-      db = await initDb();
-    }
-    return db;
-  } catch (e) {
-    logDbOperation('get-db', 'failed', { error: e });
-    throw e;
-  }
-};
-
-// ---------------------------------------------------------------------------
-// QUEUE OPERATION — SERIAL EXECUTION, SAFE
-// ---------------------------------------------------------------------------
-export const queueOperation = async (operation, description) => {
+export const queueOperation = (operation, description = "operation") => {
   const opId = `${description}-${Date.now()}`;
-  logDbOperation(opId, 'queued');
 
-  // Chain to queue
+  let localResolve, localReject;
+  const promiseReturn = new Promise((res, rej) => {
+    localResolve = res;
+    localReject = rej;
+  });
+
   operationQueue = operationQueue
-    .catch(() => {}) // ignore previous error
+    .catch(() => {})
     .then(async () => {
-      logDbOperation(opId, 'starting');
+      logDbOperation(opId, "starting");
       return safeRetry(operation, description);
     })
-    .then((res) => {
-      logDbOperation(opId, 'success');
-      return res;
+    .then((result) => {
+      logDbOperation(opId, "success");
+      localResolve(result);
     })
     .catch((err) => {
-      logDbOperation(opId, 'failed', { error: err });
-      throw err;
+      logDbOperation(opId, "failed", { error: err });
+      localReject(err);
     })
     .finally(() => {
       DB_MONITOR.operations.delete(opId);
     });
 
-  return operationQueue;
+  return promiseReturn;
 };
 
-// ---------------------------------------------------------------------------
-// EXECUTE SQL — WITH QUEUE + RETRY
-// ---------------------------------------------------------------------------
-export const executeWithLog = async (
-  operation,
-  sql,
-  params = [],
-  useTransaction = false
-) => {
-  const db = await getDb();
-
-  return queueOperation(async () => {
-    logDbOperation(operation, 'started', { sql, params });
-
-    let result;
-
-    // TRANSACTION MODE (optional)
-    if (useTransaction) {
-      await db.execAsync('BEGIN;');
-
-      try {
-        result = await db[operation](sql, params);
-        await db.execAsync('COMMIT;');
-      } catch (err) {
-        await db.execAsync('ROLLBACK;');
-        throw err;
-      }
-    } else {
-      result = await db[operation](sql, params);
-    }
-
-    logDbOperation(operation, 'completed');
-    return result;
-  }, `${operation}: ${sql}`);
-};

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import StartEndButton from './StartEndButton';
+import StartEndButton from '../components/StartEndButton';
 
 export const HeaderButtons = ({ 
   isStarted, 

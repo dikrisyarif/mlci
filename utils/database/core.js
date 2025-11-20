@@ -1,8 +1,12 @@
 import { initDb, getDb as getDbInstance, queueOperation } from './operations';
 import { logDbOperation } from './monitor';
 
+export const initDatabase = async () => {
+  return await initDb();
+};
+
 // ---------------------------------------------------------------------------
-// getDb — always returns the same initialized DB
+// getDb — always returns the same initialized DB instance
 // ---------------------------------------------------------------------------
 export const getDb = async () => {
   try {
@@ -15,60 +19,59 @@ export const getDb = async () => {
 };
 
 // ---------------------------------------------------------------------------
-// execute SQL helpers — routed via queueOperation
+// executeWithLog — queued query executor (NO nested transaction!)
 // ---------------------------------------------------------------------------
 export const executeWithLog = async (
   operation,
   sql,
   params = [],
-  useTransaction = false
+  useTransaction = false,
+  bypassQueue = false
 ) => {
-  return queueOperation(
-    async () => {
-      const db = await getDb();
+  const runner = async () => {
+    const db = await getDb();
+    logDbOperation(operation, 'started', { sql, params });
 
-      logDbOperation(operation, 'started', { sql, params });
-
-      let result;
-
-      if (useTransaction) {
-        await db.execAsync('BEGIN;');
-        try {
-          result = await db[operation](sql, params);
-          await db.execAsync('COMMIT;');
-        } catch (err) {
-          await db.execAsync('ROLLBACK;');
-          throw err;
-        }
-      } else {
+    let result = null;
+    if (useTransaction) {
+      await db.execAsync('BEGIN TRANSACTION;');
+      try {
         result = await db[operation](sql, params);
+        await db.execAsync('COMMIT;');
+      } catch (err) {
+        await db.execAsync('ROLLBACK;');
+        logDbOperation(operation, 'failed', { error: err.message });
+        throw err;
       }
+    } else {
+      if (typeof db[operation] !== 'function') {
+        throw new Error(`DB method '${operation}' not found`);
+      }
+      result = await db[operation](sql, params);
+    }
 
-      logDbOperation(operation, 'completed');
-      return result;
-    },
-    `${operation}: ${sql}`
-  );
+    logDbOperation(operation, 'completed');
+    return result;
+  };
+
+  // 🔥 Jika bypassQueue = true → jalankan langsung tanpa antre
+  if (bypassQueue) {
+    return runner();
+  }
+
+  // Default: lewat queueOperation
+  return queueOperation(runner, `queue:${operation}:${sql}`);
 };
 
 // ---------------------------------------------------------------------------
-// runQuery helper (SELECT returning rows)
+// Query Helpers
 // ---------------------------------------------------------------------------
-export const runQuery = async (sql, params = []) => {
-  return executeWithLog('getAllAsync', sql, params);
-};
+export const runQuery = (sql, params = []) =>
+  executeWithLog('getAllAsync', sql, params);
 
-// ---------------------------------------------------------------------------
-// runCommand helper (INSERT / UPDATE / DELETE)
-// ---------------------------------------------------------------------------
-export const runCommand = async (sql, params = []) => {
-  return executeWithLog('runAsync', sql, params);
-};
+export const runCommand = (sql, params = []) =>
+  executeWithLog('runAsync', sql, params);
 
-// ---------------------------------------------------------------------------
-// runGetFirst helper (SELECT returning one row)
-// ---------------------------------------------------------------------------
-export const runGetFirst = async (sql, params = []) => {
-  return executeWithLog('getFirstAsync', sql, params);
-};
+export const runGetFirst = (sql, params = []) =>
+  executeWithLog('getFirstAsync', sql, params);
 

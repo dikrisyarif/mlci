@@ -1,37 +1,69 @@
-import * as Database from '../utils/database';
-import { fetchListDtl } from '../api/listApi';
-import NetInfo from '@react-native-community/netinfo';
-import { Alert } from 'react-native';
+import {
+  getContracts,
+  saveContracts,
+  clearContracts,
+  updateContractFlag,
+} from "../utils/database/contracts";
+
+import {
+  getUnuploadedCheckins,
+  markCheckinAsUploaded,
+  addCheckin,
+  getContractCheckinDetails,
+  isContractCheckedIn,
+} from "../utils/database/checkins";
+
+import { getAppState, saveAppState } from "../utils/database/state";
+import { isContractsStale } from "../utils/isStale";
+import { fetchListDtl } from "../api/listApi";
+import NetInfo from "@react-native-community/netinfo";
+import { Alert } from "react-native";
 
 export const ContractService = {
+  /** ----------------------------------------------------------------------
+   *  FETCH KONTRAK (AUTO STALE CHECK + OFFLINE MERGE)
+   * -----------------------------------------------------------------------
+   */
   async fetchContracts(profile, addCheckinLocal, checkinLocations) {
-    //console.log('[DEBUG] ContractService: fetchContracts called for', profile?.UserName);
-    // Get list of checked in contracts for today from local database
-    const checkedInContracts = new Set();
-    const allCheckins = await Database.getUnuploadedCheckins();
-    const today = new Date().toISOString().split('T')[0];
-    
-    allCheckins.forEach(checkin => {
-      const checkinDate = new Date(checkin.timestamp).toISOString().split('T')[0];
-      if (checkinDate === today) {
-        checkedInContracts.add(checkin.lease_no);
-      }
-    });
-
-    let contractData = [];
+    const userName = profile?.UserName;
     const netInfo = await NetInfo.fetch();
 
-    // Coba ambil data lokal terlebih dahulu
-    let localData = await Database.getContracts(profile.UserName);
-  //console.log('[DEBUG] ContractService: Data lokal yang tersedia:', localData.length, 'kontrak', localData);
+    // ✅ Ambil last sync timestamp
+    const lastSync = await getAppState("last_contract_sync");
 
+    // ✅ Cek apakah stale (data bukan hari ini)
+    if (isContractsStale(lastSync)) {
+      console.log("[Contracts] Local cache is stale → clearing...");
+      await clearContracts();
+    }
+
+    // ✅ Ambil local contracts
+    let localContracts = await getContracts(userName);
+
+    // ✅ Ambil data check-in lokal (belum upload)
+    const offlineCheckins = await getUnuploadedCheckins();
+
+    const today = new Date().toISOString().split("T")[0];
+    const checkedToday = new Set(
+      offlineCheckins
+        .filter(
+          (c) => new Date(c.timestamp).toISOString().split("T")[0] === today
+        )
+        .map((c) => c.lease_no)
+    );
+
+    let resultContracts = [];
+
+    // ==========================================================
+    // ✅ ONLINE MODE → FETCH API → MERGE → SIMPAN LOCAL
+    // ==========================================================
     if (netInfo.isConnected) {
       try {
-        //console.log('[DEBUG] ContractService: Online, mengambil data dari server...');
-        const response = await fetchListDtl({ EmployeeName: profile.UserName });
+        const response = await fetchListDtl({ EmployeeName: userName });
+
         if (response.Status === 1 && Array.isArray(response.Data)) {
-          contractData = response.Data.map((item, index) => ({
-            id: index + 1,
+          let apiContracts = response.Data.map((item, idx) => ({
+            id: idx + 1,
             CustName: item.CustName,
             CustAddress: item.CustAddress,
             LeaseNo: item.LeaseNo,
@@ -48,147 +80,156 @@ export const ContractService = {
             comment: item.Comment,
             Latitude: item.Lattitude ? parseFloat(item.Lattitude) : null,
             Longitude: item.Longtitude ? parseFloat(item.Longtitude) : null,
-            CheckIn: item.CheckinDate && item.CheckinDate !== "0001-01-01T00:00:00" ? item.CheckinDate : null,
-            isCheckedIn: checkedInContracts.has(item.LeaseNo) || 
-                        (item.CheckinDate && item.CheckinDate !== "0001-01-01T00:00:00"),
+            CheckIn:
+              item.CheckinDate && item.CheckinDate !== "0001-01-01T00:00:00"
+                ? item.CheckinDate
+                : null,
+
+            isCheckedIn:
+              checkedToday.has(item.LeaseNo) ||
+              (item.CheckinDate && item.CheckinDate !== "0001-01-01T00:00:00"),
           }));
 
-          // Merge data server dengan data lokal untuk mempertahankan status lokal
-          if (localData.length > 0) {
-            contractData = contractData.map(serverItem => {
-              const localItem = localData.find(local => local.LeaseNo === serverItem.LeaseNo);
-              if (localItem) {
-                return {
-                  ...serverItem,
-                  isCheckedIn: localItem.isCheckedIn || serverItem.isCheckedIn,
-                  comment: localItem.comment || serverItem.comment
-                };
-              }
-              return serverItem;
+          // ✅ Merge comment & check-in offline
+          if (localContracts.length > 0) {
+            apiContracts = apiContracts.map((server) => {
+              const local = localContracts.find(
+                (x) => x.LeaseNo === server.LeaseNo
+              );
+              if (!local) return server;
+
+              return {
+                ...server,
+                comment: local.comment ?? server.comment,
+                isCheckedIn: local.isCheckedIn || server.isCheckedIn,
+              };
             });
           }
 
-          //console.log('[ContractService] Menyimpan', contractData.length, 'kontrak ke database lokal');
-          // Save to local database
-          await Database.saveContracts(contractData, profile.UserName);
-          
-          // Verifikasi data tersimpan
-          const verifyData = await Database.getContracts(profile.UserName);
-          if (verifyData.length === 0) {
-            // console.error('[ContractService] Data gagal tersimpan ke lokal! Mencoba sekali lagi...');
-            await Database.saveContracts(contractData, profile.UserName);
-            
-            // Verifikasi kedua
-            const secondVerify = await Database.getContracts(profile.UserName);
-            if (secondVerify.length === 0) {
-              console.error('[ContractService] Gagal menyimpan data ke lokal setelah percobaan kedua!');
-              throw new Error('Failed to save contracts to local database');
+          // ✅ Merge offline checkins (belum upload)
+          offlineCheckins.forEach((off) => {
+            const target = apiContracts.find((c) => c.LeaseNo === off.lease_no);
+            if (target) {
+              target.isCheckedIn = true;
+              target.comment = off.comment || target.comment;
+              target.CheckIn = off.timestamp;
+              target.Latitude = off.latitude;
+              target.Longitude = off.longitude;
             }
-          } else {
-            //console.log('[ContractService] Verifikasi: Data berhasil tersimpan,', verifyData.length, 'kontrak');
-          }
+          });
+
+          // ✅ Simpan ke lokal
+          await saveContracts(apiContracts, userName);
+
+          // ✅ Simpan timestamp sync → supaya tidak stale
+          await saveAppState("last_contract_sync", new Date().toISOString());
+
+          resultContracts = apiContracts;
+        } else {
+          resultContracts = localContracts;
         }
-      } catch (error) {
-        // console.error('[ContractService] Error mengambil data dari server:', error);
-        if (localData.length > 0) {
-    //console.log('[DEBUG] ContractService: Menggunakan data lokal karena error server', localData);
-          contractData = localData;
-        }
+      } catch (err) {
+        console.warn("[Contracts] ⚠️ API fetch error, fallback ke lokal:", err);
+        resultContracts = localContracts;
       }
-    } else {
-      if (localData.length > 0) {
-  //console.log('[DEBUG] ContractService: Offline, menggunakan', localData.length, 'data dari lokal', localData);
-        contractData = localData;
+    }
+    // ==========================================================
+    // ✅ OFFLINE MODE → GABUNGKAN CHECKIN LOKAL DENGAN KONTRAK
+    // ==========================================================
+    else {
+      console.log("[Contracts] Offline mode → merging local check-ins...");
+
+      resultContracts = localContracts.map((c) => {
+        const offline = offlineCheckins.find((o) => o.lease_no === c.LeaseNo);
+        if (offline) {
+          return {
+            ...c,
+            isCheckedIn: true,
+            comment: offline.comment || c.comment,
+            CheckIn: offline.timestamp,
+            Latitude: offline.latitude,
+            Longitude: offline.longitude,
+          };
+        }
+        return c;
+      });
+    }
+
+    // ✅ Fallback jika lokal kosong
+    if (!resultContracts || resultContracts.length === 0) {
+      if (!netInfo.isConnected) {
+        Alert.alert("Offline", "Tidak ada data kontrak tersimpan.");
       }
     }
 
-    // If no data from server or offline, get from local database
-    if (contractData.length === 0) {
-      contractData = await Database.getContracts(profile.UserName);
-      //console.log('[DEBUG] ContractService: Fallback getContracts, result:', contractData);
-      if (contractData.length === 0) {
-        Alert.alert(
-          'Mode Offline',
-          'Tidak ada data kontrak tersimpan. Silakan sinkronkan saat online.'
-        );
-      }
-    }
-
-    // Update checked-in locations
-    const checkedInLocations = contractData
-      .filter(item => item.isCheckedIn && item.Latitude && item.Longitude)
-      .map(item => ({
-        contractId: item.LeaseNo,
-        contractName: item.CustName,
-        remark: item.comment,
-        latitude: item.Latitude,
-        longitude: item.Longitude,
-        timestamp: item.CheckIn,
-        tipechekin: 'kontrak',
+    // ✅ Kirim posisi checkin ke MapContext (agar muncul di map / marker)
+    const mapCheckedIn = resultContracts
+      .filter((c) => c.isCheckedIn && c.Latitude && c.Longitude)
+      .map((c) => ({
+        contractId: c.LeaseNo,
+        contractName: c.CustName,
+        remark: c.comment,
+        latitude: c.Latitude,
+        longitude: c.Longitude,
+        timestamp: c.CheckIn,
+        tipechekin: "kontrak",
       }));
 
-    // Add to MapContext if not exists
-    checkedInLocations.forEach(loc => {
-      const isExist = checkinLocations.some(
-        l => l.contractId === loc.contractId &&
-             l.tipechekin === loc.tipechekin &&
-             l.timestamp === loc.timestamp
+    mapCheckedIn.forEach((loc) => {
+      const exist = checkinLocations.some(
+        (x) =>
+          x.contractId === loc.contractId &&
+          x.timestamp === loc.timestamp &&
+          x.tipechekin === "kontrak"
       );
-      if (!isExist && typeof addCheckinLocal === 'function') {
-        //console.log('[DEBUG] ContractService: Adding checkin location to MapContext:', loc);
+      if (!exist && typeof addCheckinLocal === "function") {
         addCheckinLocal(loc);
       }
     });
 
-    return contractData;
-  //console.log('[DEBUG] ContractService: Returning contractData:', contractData);
+    return resultContracts;
   },
-
-  async getUnuploadedCheckins() {
+  async updateLocalContractFlag(leaseNo, isCheckedIn, employeeName) {
     try {
-      const checkins = await Database.getUnuploadedCheckins();
-      //console.log('[Database] Getting unuploaded check-ins...');
-      //console.log('[Database] Found unuploaded check-ins:', checkins.length);
-      return checkins;
-    } catch (error) {
-      console.error('[ContractService] Error getting unuploaded check-ins:', error);
-      return [];
-    }
-  },
-
-  async markCheckinAsUploaded(id) {
-    try {
-      await Database.markCheckinAsUploaded(id);
-    } catch (error) {
-      console.error('[ContractService] Error marking check-in as uploaded:', error);
-      throw error;
-    }
-  },
-
-  async isContractCheckedIn(leaseNo, employeeName) {
-    try {
-      return await Database.isContractCheckedIn(leaseNo, employeeName);
-    } catch (error) {
-      console.error('[ContractService] Error checking contract check-in status:', error);
+      const result = await updateContractFlag(
+        leaseNo,
+        isCheckedIn,
+        employeeName
+      );
+      console.log(
+        "[ContractService] ✅ Local contract flag updated:",
+        leaseNo,
+        isCheckedIn
+      );
+      return result;
+    } catch (err) {
+      // console.error(
+      //   "[ContractService] ❌ Failed to update local contract flag:",
+      //   err
+      // );
       return false;
     }
   },
+  // ------------------------------------------------------------------------
+  // 🔹 Wrapper-method lain (dipakai hook lain)
+  // ------------------------------------------------------------------------
+  async getUnuploadedCheckins() {
+    return await getUnuploadedCheckins();
+  },
 
-  async addCheckin(checkinData) {
-    try {
-      return await Database.addCheckin(checkinData);
-    } catch (error) {
-      console.error('[ContractService] Error adding check-in:', error);
-      throw error;
-    }
+  async markCheckinAsUploaded(id) {
+    return await markCheckinAsUploaded(id);
+  },
+
+  async addCheckin(data) {
+    return await addCheckin(data);
   },
 
   async getContractCheckinDetails(leaseNo, employeeName) {
-    try {
-      return await Database.getContractCheckinDetails(leaseNo, employeeName);
-    } catch (error) {
-      console.error('[ContractService] Error getting contract check-in details:', error);
-      throw error;
-    }
-  }
+    return await getContractCheckinDetails(leaseNo, employeeName);
+  },
+
+  async isContractCheckedIn(leaseNo, employeeName) {
+    return await isContractCheckedIn(leaseNo, employeeName);
+  },
 };

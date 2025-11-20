@@ -1,28 +1,36 @@
-import { getDb, executeWithLog } from './core';
+import { executeWithLog } from './core';
 
 export const saveAppState = async (key, value) => {
-  //console.log('[AppState] Saving state:', { key, value });
   try {
     await executeWithLog(
       'runAsync',
       'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?);',
       [key, value],
-      false // Do NOT use transaction to avoid nested transaction error
+      false
     );
-    //console.log('[AppState] State saved successfully');
-  } catch (error) {
-    console.error('[AppState] Failed to save state:', error);
-    throw error;
+  } catch (err) {
+    if (err.message.includes('no such table')) {
+      console.warn('[AppState] app_state table missing (DB reset). State not saved.');
+      return false;
+    }
+    throw err;
   }
 };
 
 export const getAppState = async (key) => {
-  //console.log('[AppState] Getting state for key:', key);
-  const result = await executeWithLog(
-    'getFirstAsync',
-    'SELECT value FROM app_state WHERE key = ?;',
-    [key]
-  );
-  //console.log('[AppState] Retrieved state:', { key, value: result?.value });
-  return result ? result.value : null;
+  try {
+    const result = await executeWithLog(
+      'getFirstAsync',
+      'SELECT value FROM app_state WHERE key = ?;',
+      [key]
+    );
+    return result ? result.value : null;
+
+  } catch (err) {
+    if (err.message.includes('no such table')) {
+      console.warn('[AppState] app_state not ready (reset in progress). Return null.');
+      return null;
+    }
+    throw err;
+  }
 };

@@ -1,114 +1,196 @@
-import { getDb } from './core';
+import { executeWithLog } from './core';
+import { saveAppState } from './state';
 
+/**
+ * ✅ Save contracts for a specific employee
+ */
 export const saveContracts = async (contracts, employeeName) => {
-  console.log('[DB][saveContracts] Menyimpan kontrak untuk:', employeeName, '| Jumlah:', contracts.length);
-  
+  console.log('[DB][saveContracts] Saving contracts for:', employeeName, '| Count:', contracts?.length ?? 0);
+
+  if (!employeeName) {
+    // console.error('[DB][saveContracts] ❌ employeeName kosong, batal simpan!');
+    return;
+  }
+
+  if (!Array.isArray(contracts)) {
+    // console.error('[DB][saveContracts] ❌ contracts bukan array!');
+    return;
+  }
+
   try {
-    const db = await getDb();
-    if (!db || !db.runAsync || !db.getFirstAsync) {
-      console.error('[Database] DB instance not ready:', { db });
-      throw new Error('Database not properly initialized');
-    }
+    await executeWithLog('execAsync', 'BEGIN;', []);
 
-    // Start transaction
-    await db.execAsync('BEGIN TRANSACTION;');
-    
-    try {
-      const contractsJson = JSON.stringify(contracts);
+    // Hapus kontrak lama
+    await executeWithLog('runAsync', 'DELETE FROM contracts WHERE employee_name = ?;', [employeeName]);
 
-      // Delete old data within transaction
-      await db.runAsync(
-        'DELETE FROM contracts WHERE employee_name = ?;',
-        [employeeName]
-      );
-
-      // Save new data within transaction
-      await db.runAsync(
+    // Simpan kontrak baru
+    for (const c of contracts) {
+      await executeWithLog(
+        'runAsync',
         'INSERT INTO contracts (contract_data, employee_name) VALUES (?, ?);',
-        [contractsJson, employeeName]
+        [JSON.stringify(c), employeeName]
       );
-
-      // Commit transaction
-      await db.execAsync('COMMIT;');
-
-      // Try to force a WAL checkpoint so other connections see the changes immediately.
-      // Some sqlite builds (especially older or embedded wrappers) may not support this pragma;
-      // run in a try/catch and degrade gracefully if it fails.
-      try {
-        if (db && db.execAsync) {
-          await db.execAsync('PRAGMA wal_checkpoint(FULL);');
-          console.log('[DB][saveContracts] WAL checkpoint completed');
-        }
-      } catch (checkpointErr) {
-        console.warn('[DB][saveContracts] WAL checkpoint failed or not supported:', checkpointErr?.message || checkpointErr);
-      }
-
-      // Verify data was saved successfully
-      const verifyData = await getContracts(employeeName);
-      if (!verifyData || verifyData.length === 0) {
-        throw new Error('Verification failed: Data not saved');
-      }
-
-      console.log('[Database] Kontrak berhasil disimpan ke database lokal');
-      return true;
-    } catch (error) {
-      // Rollback on error
-      await db.execAsync('ROLLBACK;');
-      console.error('[Database] Error in transaction:', error);
-      throw error;
     }
+
+    await executeWithLog('execAsync', 'COMMIT;', []);
+
+    console.log(`[DB][saveContracts] ✅ Saved ${contracts.length} contracts for ${employeeName}`);
+    await saveAppState(`last_contract_sync_${employeeName}`, new Date().toISOString());
   } catch (error) {
-    console.error('[Database] Error menyimpan kontrak:', error);
-    throw error;
+    // console.error('[DB][saveContracts] ❌ Error:', error);
+    try {
+      await executeWithLog('execAsync', 'ROLLBACK;', []);
+    } catch (_) {}
   }
 };
 
+/**
+ * ✅ Read contracts for specific employee
+ */
 export const getContracts = async (employeeName) => {
-  console.log('[DB][getContracts] Mengambil kontrak untuk:', employeeName);
-  
-  try {
-    const db = await getDb();
-    if (!db || !db.getFirstAsync) {
-      console.error('[Database] DB instance not ready (getContracts):', { db });
-      throw new Error('Database not properly initialized');
-    }
+  console.log('[DB][getContracts] Reading contracts for:', employeeName);
 
-    const result = await db.getFirstAsync(
+  try {
+    const rows = await executeWithLog(
+      'getAllAsync',
       'SELECT contract_data FROM contracts WHERE employee_name = ?;',
       [employeeName]
     );
 
-    if (result && result.contract_data) {
-      try {
-        const contracts = JSON.parse(result.contract_data);
-        console.log('[DB][getContracts] Data kontrak ditemukan:', contracts.length);
-        return contracts;
-      } catch (parseError) {
-        console.error('[DB][getContracts] Error parsing contract data:', parseError);
-        return [];
-      }
-    } else {
-      console.log('[DB][getContracts] Tidak ada kontrak tersimpan untuk:', employeeName);
+    if (!rows || rows.length === 0) {
+      console.log('[DB][getContracts] Empty.');
       return [];
     }
+
+    const list = rows
+      .map(r => {
+        try {
+          return JSON.parse(r.contract_data);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    console.log('[DB][getContracts] Found:', list.length);
+    return list;
   } catch (error) {
-    console.error('[Database] Error mengambil kontrak:', error);
+    // console.error('[DB][getContracts] Error:', error);
     return [];
   }
 };
 
-// Debug helper: return raw rows from contracts table
+/**
+ * ✅ Debug helper: ambil semua raw rows dari tabel contracts
+ */
 export const getContractsRaw = async () => {
   try {
-    const db = await getDb();
-    if (!db || !db.getAllAsync) {
-      console.error('[Database] DB instance not ready (getContractsRaw):', { db });
-      return [];
-    }
-    const rows = await db.getAllAsync('SELECT id, contract_data, employee_name FROM contracts;');
+    const rows = await executeWithLog(
+      'getAllAsync',
+      'SELECT id, contract_data, employee_name FROM contracts;',
+      []
+    );
     return rows || [];
-  } catch (error) {
-    console.error('[Database] Error getting raw contracts rows:', error);
+  } catch (err) {
+    // console.error('[DB][getContractsRaw] Error:', err);
     return [];
   }
 };
+
+/**
+ * ✅ Clear all local contract data
+ */
+export const clearContracts = async () => {
+  try {
+    console.log('[DB][clearContracts] Clearing all contract data...');
+    await executeWithLog('runAsync', 'DELETE FROM contracts;', []);
+    console.log('[DB][clearContracts] Done.');
+    return true;
+  } catch (err) {
+    // console.error('[DB][clearContracts] Error:', err);
+    return false;
+  }
+};
+
+/**
+ * ✅ Update comment dalam contract_data JSON
+ */
+export const updateContractComment = async (leaseNo, comment, employeeName) => {
+  try {
+    const rows = await executeWithLog(
+      'getAsync',
+      'SELECT id, contract_data FROM contracts WHERE employee_name = ?;',
+      [employeeName]
+    );
+
+    if (!rows) return false;
+
+    for (const row of Array.isArray(rows) ? rows : [rows]) {
+      const data = JSON.parse(row.contract_data || '{}');
+      if (data.LeaseNo === leaseNo) {
+        data.comment = comment;
+        await executeWithLog(
+          'runAsync',
+          'UPDATE contracts SET contract_data = ? WHERE id = ?;',
+          [JSON.stringify(data), row.id]
+        );
+        console.log(`[DB][updateContractComment] Updated comment for ${leaseNo}`);
+        return true;
+      }
+    }
+
+    return false;
+  } catch (err) {
+    // console.error('[DB][updateContractComment] Error:', err);
+    return false;
+  }
+};
+
+/**
+ * ✅ Update isCheckedIn flag dalam contract_data JSON
+ */
+export const updateContractFlag = async (leaseNo, isCheckedIn, employeeName) => {
+  try {
+    // 🔹 Ganti 'getAsync' → 'getAllAsync'
+    const rows = await executeWithLog(
+      'getAllAsync',
+      'SELECT id, contract_data FROM contracts WHERE employee_name = ?;',
+      [employeeName]
+    );
+
+    if (!rows || rows.length === 0) {
+      console.warn('[DB][updateContractFlag] No contract found for', employeeName);
+      return false;
+    }
+
+    for (const row of rows) {
+      let data = {};
+      try {
+        data = JSON.parse(row.contract_data || '{}');
+      } catch (err) {
+        console.warn('[DB][updateContractFlag] JSON parse failed:', err);
+        continue;
+      }
+
+      if (data.LeaseNo === leaseNo) {
+        data.isCheckedIn = !!isCheckedIn;
+
+        await executeWithLog(
+          'runAsync',
+          'UPDATE contracts SET contract_data = ? WHERE id = ?;',
+          [JSON.stringify(data), row.id]
+        );
+
+        console.log(`[DB][updateContractFlag] ✅ Updated isCheckedIn for ${leaseNo}`);
+        return true;
+      }
+    }
+
+    console.warn('[DB][updateContractFlag] LeaseNo not found:', leaseNo);
+    return false;
+  } catch (err) {
+    // console.error('[DB][updateContractFlag] Error:', err);
+    return false;
+  }
+};
+

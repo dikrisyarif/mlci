@@ -7,6 +7,6 @@ export const test = async () => {
         await scheduleMidnightCleanup('test');
         //console.log('Imports working correctly');
     } catch (error) {
-        console.error('Import test failed:', error);
+        // console.error('Import test failed:', error);
     }
 };

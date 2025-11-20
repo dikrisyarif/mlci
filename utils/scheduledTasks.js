@@ -23,7 +23,7 @@ async function isCleanupNeeded() {
     const today = new Date().toISOString().split('T')[0];
     return lastCleanup !== today;
   } catch (error) {
-    console.error('Error checking cleanup status:', error);
+    // console.error('Error checking cleanup status:', error);
     return true;
   }
 }
@@ -49,7 +49,7 @@ async function performAutoStop(employeeName) {
     
     //console.log('Auto-stop completed successfully');
   } catch (error) {
-    console.error('Error during auto-stop:', error);
+    // console.error('Error during auto-stop:', error);
   }
 }
 
@@ -72,7 +72,7 @@ export async function scheduleMidnightCleanup(employeeName) {
       // Mark cleanup as done for today
       await AsyncStorage.setItem(LAST_CLEANUP_KEY, new Date().toISOString().split('T')[0]);
     } catch (error) {
-      console.error('Error during cleanup:', error);
+      // console.error('Error during cleanup:', error);
     }
   }
 
@@ -99,7 +99,7 @@ export async function scheduleMidnightCleanup(employeeName) {
       // Schedule next day's cleanup
       scheduleMidnightCleanup(employeeName);
     } catch (error) {
-      console.error('Error during midnight cleanup:', error);
+      // console.error('Error during midnight cleanup:', error);
       // Try to reschedule even if there was an error
       scheduleMidnightCleanup(employeeName);
     }
