@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMap } from '../context/MapContext';
 import AutoSyncWorker from '../utils/autoSyncWorker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Database from '../utils/database';
 
 export const useAutoSync = () => {
   const { state: authState } = useAuth();
@@ -12,7 +12,7 @@ export const useAutoSync = () => {
 
   useEffect(() => {
     const checkTrackingStatus = async () => {
-      const lastStart = await AsyncStorage.getItem('lastCheckinStartTimestamp');
+      const lastStart = await Database.getAppState('lastCheckinStartTimestamp');
       isStartedRef.current = !!lastStart;
     };
 

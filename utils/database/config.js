@@ -13,6 +13,8 @@ export const DB_CONFIG = {
   tables: {
     metadata: 'metadata',
     background_tracks: 'background_tracks',
+    // ensure legacy/other helpers can reference start/stop checkins
+    checkin_startstop: 'checkin_startstop',
     contract_checkins: 'contract_checkins',
     contracts: 'contracts',
     app_state: 'app_state'

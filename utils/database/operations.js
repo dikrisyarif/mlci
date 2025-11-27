@@ -1,6 +1,7 @@
 import { openDatabaseAsync } from 'expo-sqlite';
 import { DB_CONFIG, wait } from './config';
 import { logDbOperation, DB_MONITOR } from './monitor';
+import { migrateDatabase } from './migration';
 
 // ---------------------------------------------------------------------------
 // GLOBAL STATE
@@ -85,6 +86,13 @@ export const initDb = async () => {
         await db.execAsync("PRAGMA journal_mode = WAL;");
         await db.execAsync("PRAGMA synchronous = NORMAL;");
       } catch (_) {}
+
+      // Run migrations to ensure all tables exist
+      try {
+        await migrateDatabase(db, 0, DB_CONFIG.version);
+      } catch (mErr) {
+        console.warn('[DB][migration] Migration warning:', mErr?.message || mErr);
+      }
 
       logDbOperation("init-db", "completed");
     }

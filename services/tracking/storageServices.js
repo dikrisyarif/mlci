@@ -1,15 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Database from '../../utils/database';
 
 /**
  * Update last sent info
  */
 export async function updateLastSentInfo(loc) {
   try {
-    await AsyncStorage.setItem('lastTrackingSentTimestamp', loc.timestamp);
-    await AsyncStorage.setItem(
-      'lastTrackingSentLoc',
-      JSON.stringify({ latitude: loc.latitude, longitude: loc.longitude })
-    );
+    await Database.saveAppState('lastTrackingSentTimestamp', loc.timestamp);
+    await Database.saveAppState('lastTrackingSentLoc', JSON.stringify({ latitude: loc.latitude, longitude: loc.longitude }));
   } catch (error) {
     // console.error('[storageService] Update sent info error:', error);
   }
@@ -20,8 +17,8 @@ export async function updateLastSentInfo(loc) {
  */
 export async function isDuplicateLocation(loc) {
   try {
-    const lastTs = await AsyncStorage.getItem('lastTrackingSentTimestamp');
-    const lastLocStr = await AsyncStorage.getItem('lastTrackingSentLoc');
+    const lastTs = await Database.getAppState('lastTrackingSentTimestamp');
+    const lastLocStr = await Database.getAppState('lastTrackingSentLoc');
 
     if (lastTs && lastLocStr) {
       const lastLoc = JSON.parse(lastLocStr);
@@ -41,8 +38,8 @@ export async function isDuplicateLocation(loc) {
  */
 export async function isTooCloseToCheckin(loc, TRACKING_CONFIG) {
   try {
-    const lastCheckinTs = await AsyncStorage.getItem('lastCheckinStartTimestamp');
-    const lastCheckinLocStr = await AsyncStorage.getItem('lastCheckinStartLoc');
+    const lastCheckinTs = await Database.getAppState('lastCheckinStartTimestamp');
+    const lastCheckinLocStr = await Database.getAppState('lastCheckinStartLoc');
 
     if (lastCheckinTs && lastCheckinLocStr) {
       const lastLoc = JSON.parse(lastCheckinLocStr);

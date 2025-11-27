@@ -1,5 +1,4 @@
 import * as Location from "expo-location";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Database from "./utils/database";
 
 const LOCATION_TASK_NAME = "background-location-task";
@@ -41,7 +40,7 @@ export async function startBackgroundTracking() {
       notificationColor: "#007bff",
     },
   });
-  await AsyncStorage.setItem("isTracking", "true");
+  await Database.saveAppState("isTracking", "true");
   console.log("[BG Tracking] BACKGROUND tracking DIMULAI (interval 15 detik)");
 }
 
@@ -50,8 +49,8 @@ export async function stopBackgroundTracking() {
     LOCATION_TASK_NAME
   );
   if (isActive) {
-    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
-    await AsyncStorage.setItem("isTracking", "false");
+  await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  await Database.saveAppState("isTracking", "false");
     console.log('[BG Tracking] Background tracking dihentikan');
   } else {
     console.log('[BG Tracking] Tidak ada background tracking yang aktif');

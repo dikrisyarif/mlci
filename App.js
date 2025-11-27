@@ -50,20 +50,20 @@ const App = () => {
       while (attempt < maxAttempts && mounted) {
         attempt++;
         try {
-          console.log(
-            `[DEBUG][App.js] Initializing database (attempt ${attempt})...`
-          );
+          // console.log(
+          //   // `[DEBUG][App.js] Initializing database (attempt ${attempt})...`
+          // );
 
           // 1. Initialize DB
           const db = await Database.initDatabase();
-          if (db?.filename || db?._db?.filename) {
-            console.log(
-              "[DEBUG][App.js] DB path:",
-              db.filename || db._db.filename
-            );
-          } else {
-            console.log("[DEBUG][App.js] DB path: [unknown]");
-          }
+          // if (db?.filename || db?._db?.filename) {
+          //   console.log(
+          //     "[DEBUG][App.js] DB path:",
+          //     db.filename || db._db.filename
+          //   );
+          // } else {
+          //   console.log("[DEBUG][App.js] DB path: [unknown]");
+          // }
 
           // 2. Import services AFTER DB ready
           const { migratePendingLocationsToDatabase } = await import(
@@ -88,9 +88,9 @@ const App = () => {
             setDbInitError(null);
           }
 
-          console.log(
-            "[DEBUG][App.js] Database initialization completed successfully."
-          );
+          // console.log(
+          //   "[DEBUG][App.js] Database initialization completed successfully."
+          // );
           return; // success — exit retry loop
         } catch (error) {
           lastError = error;

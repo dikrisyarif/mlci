@@ -69,7 +69,7 @@ const HomeScreen = ({ navigation }) => {
               console.log(
                 "[DEBUG][HomeScreen] raw contracts rows:",
                 raw.length,
-                raw.map((r) => ({ id: r.id, employee_name: r.employee_name }))
+                // raw.map((r) => ({ id: r.id, employee_name: r.employee_name }))
               );
             } catch (e) {
               // console.error("[DEBUG][HomeScreen] failed to read raw rows:", e);
@@ -94,18 +94,18 @@ const HomeScreen = ({ navigation }) => {
 
   // KEEP ORIGINAL — Reset DB
   const [resetting, setResetting] = React.useState(false);
-  const handleResetDatabase = async () => {
-    setResetting(true);
-    try {
-      await resetDatabase();
-      const userName = state?.userInfo?.UserName || "unknown";
-      await dbGetContracts(userName);
-      alert("Database lokal berhasil direset!");
-    } catch (e) {
-      alert("Gagal reset database: " + e.message);
-    }
-    setResetting(false);
-  };
+  // const handleResetDatabase = async () => {
+  //   setResetting(true);
+  //   try {
+  //     await resetDatabase();
+  //     const userName = state?.userInfo?.UserName || "unknown";
+  //     await dbGetContracts(userName);
+  //     alert("Database lokal berhasil direset!");
+  //   } catch (e) {
+  //     alert("Gagal reset database: " + e.message);
+  //   }
+  //   setResetting(false);
+  // };
 
   const { colors } = useTheme();
   const { clearCheckins } = useMap();
@@ -130,8 +130,8 @@ const HomeScreen = ({ navigation }) => {
 
   const handleExit = async () => {
     setExitAlert(false);
-    await AsyncStorage.removeItem("locationLogs");
-    await AsyncStorage.removeItem("CheckinLocations");
+    // cleanup legacy AsyncStorage keys (locationLogs kept for compatibility)
+    try { await AsyncStorage.removeItem("locationLogs"); } catch(e){}
     if (clearCheckins) await clearCheckins();
     if (typeof signOut === "function") await signOut();
   };
@@ -193,7 +193,7 @@ const HomeScreen = ({ navigation }) => {
         <Text style={styles.text}>List Contract</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity
+      {/* <TouchableOpacity
         style={[styles.button, { backgroundColor: "#f44336" }]}
         onPress={handleResetDatabase}
         disabled={resetting}
@@ -202,7 +202,7 @@ const HomeScreen = ({ navigation }) => {
         <Text style={styles.text}>
           {resetting ? "Resetting..." : "Reset DB (Dummy)"}
         </Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
 
       <CustomAlert
         visible={exitAlert}

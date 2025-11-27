@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Database from '../../utils/database';
 import { TRACKING_CONFIG } from '../../config/trackingConfig';
 import { isDuplicateLocation, isTooCloseToCheckin, updateLastSentInfo } from './storageService';
@@ -57,7 +56,7 @@ export async function cleanupOldRecords() {
  */
 export async function getLastTrackedLocation() {
   try {
-    const lastLocStr = await AsyncStorage.getItem('lastTrackedLocation');
+    const lastLocStr = await Database.getAppState('lastTrackedLocation');
     return lastLocStr ? JSON.parse(lastLocStr) : null;
   } catch (error) {
     // console.error('[locationService] Get last location error:', error);

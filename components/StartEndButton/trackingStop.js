@@ -63,15 +63,12 @@ export const handleStopTracking = async ({
 
     // 6️⃣ Simpan ke SQLite
     await Database.saveAppState("isTracking", "false");
-    await Database.addCheckin({
+    await Database.addCheckinStartStop({
       employee_name: employeeName,
-      lease_no: "_tracking_",
+      type: "stop",
       latitude: loc.coords.latitude,
       longitude: loc.coords.longitude,
       timestamp,
-      comment: "Stop tracking",
-      is_uploaded: 0,
-      tipechekin: "stop",
     });
 
     // 7️⃣ Sync ke server (kalau online)

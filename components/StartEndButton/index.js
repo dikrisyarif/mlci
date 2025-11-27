@@ -8,99 +8,67 @@ import NetInfo from "@react-native-community/netinfo";
 import { isStartedApi } from "../../api/listApi";
 import { useAuth } from "../../context/AuthContext";
 import * as Database from "../../utils/database";
-
-// 🔥 TrackingContext sebagai sumber kebenaran global tracking
 import { useTracking } from "../../context/TrackingContext";
 
 import { handleStart, handleStop } from "./trackingHelper";
 
-const StartEndButton = ({
-  onPress,
-  checkinLocations: propCheckinLocations,
-}) => {
+const StartEndButton = ({ onPress, checkinLocations: propCheckinLocations }) => {
   const { colors } = useTheme();
-
-  // Checkin tetap dari MapContext → tidak diubah
-  const { addCheckin, checkinLocations: contextCheckinLocations } = useMap();
-
-  const checkinLocations = propCheckinLocations || contextCheckinLocations;
-
-  // 🔥 Ambil Global Tracking State (yang benar)
+  const { addCheckin, checkinLocations: mapCheckins } = useMap();
   const { isStarted, setIsStarted } = useTracking();
-
   const { state: authState } = useAuth();
+
+  const checkinLocations = propCheckinLocations || mapCheckins;
 
   const [showAlert, setShowAlert] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // ============================================================
-  // Load & Sync tracking status (local + server)
+  // Load & Sync tracking status (Local + Server)
   // ============================================================
   useEffect(() => {
     const loadTrackingStatus = async () => {
       try {
-        console.log("===== loadTrackingStatus() START =====");
-
         let employeeName =
           authState?.userInfo?.UserName || authState?.userInfo?.username;
 
         if (!employeeName) {
-          const userInfoStr = await AsyncStorage.getItem("userInfo");
-          if (userInfoStr) {
-            const userInfo = JSON.parse(userInfoStr);
-            employeeName = userInfo.UserName || userInfo.username;
+          const stored = await AsyncStorage.getItem("userInfo");
+          if (stored) {
+            const info = JSON.parse(stored);
+            employeeName = info.UserName || info.username;
           }
         }
-
-        console.log("[loadTrackingStatus] employee =", employeeName);
         if (!employeeName) return;
 
-        // LOCAL STATE
+        // LOCAL
         const localStatus = await Database.getAppState("isTracking");
-        console.log("[loadTrackingStatus] localStatus =", localStatus);
-
         if (localStatus !== null) {
           setIsStarted(localStatus === "true");
         }
 
         // SERVER
-        const netInfo = await NetInfo.fetch();
-        console.log(
-          "[loadTrackingStatus] net connected =",
-          netInfo.isConnected
-        );
-
-        if (netInfo.isConnected) {
-          const now = new Date();
-          console.log("[loadTrackingStatus] calling server isStartedApi...");
-
+        const net = await NetInfo.fetch();
+        if (net.isConnected) {
           const res = await isStartedApi({
             EmployeeName: employeeName,
-            CreatedDate: now.toISOString(),
+            CreatedDate: new Date().toISOString(),
           });
 
-          console.log("[loadTrackingStatus] server response =", res);
-
-          if (res?.Data?.NextAction) {
-            console.log(
-              "[loadTrackingStatus] server NextAction =",
-              res.Data.NextAction
-            );
-
-            const serverStatus = res.Data.NextAction === "Stop";
-            setIsStarted(serverStatus);
+          const nextAction = res?.Data?.NextAction;
+          if (nextAction) {
+            const serverStarted = nextAction === "Stop";
+            setIsStarted(serverStarted);
 
             await Database.saveAppState(
               "isTracking",
-              serverStatus ? "true" : "false"
+              serverStarted ? "true" : "false"
             );
           }
         }
       } catch (e) {
-        console.log("[loadTrackingStatus] ERROR =", e);
+        console.log("[loadTrackingStatus] ERROR", e);
       }
-
-      console.log("===== loadTrackingStatus() END =====");
     };
 
     loadTrackingStatus();
@@ -113,7 +81,7 @@ const StartEndButton = ({
     await handleStart({
       authState,
       addCheckin,
-      setStarted: setIsStarted, // ← gunakan TrackingContext
+      setStarted: setIsStarted,
       setLoading,
       onPress,
     });
@@ -130,7 +98,7 @@ const StartEndButton = ({
     await handleStop({
       authState,
       addCheckin,
-      setStarted: setIsStarted, // ← gunakan TrackingContext
+      setStarted: setIsStarted,
       setLoading,
       onPress,
       setShowAlert,
@@ -138,7 +106,8 @@ const StartEndButton = ({
   };
 
   // ============================================================
-
+  // UI
+  // ============================================================
   return (
     <>
       <TouchableOpacity
@@ -146,20 +115,15 @@ const StartEndButton = ({
           styles.button,
           isStarted
             ? { backgroundColor: "#d32f2f", borderColor: "#d32f2f" }
-            : {
-                backgroundColor: colors.button,
-                borderColor: colors.buttonborder,
-              },
+            : { backgroundColor: colors.button, borderColor: colors.buttonborder },
           { borderWidth: 1, opacity: loading ? 0.7 : 1 },
         ]}
         onPress={isStarted ? onStop : onStart}
         disabled={loading}
       >
-        {loading ? (
-          <Text style={styles.buttonText}>Loading...</Text>
-        ) : (
-          <Text style={styles.buttonText}>{isStarted ? "Stop" : "Start"}</Text>
-        )}
+        <Text style={styles.buttonText}>
+          {loading ? "Loading..." : isStarted ? "Stop" : "Start"}
+        </Text>
       </TouchableOpacity>
 
       <CustomAlert

@@ -13,9 +13,9 @@ export const getAccessTokenFromMitsui = async () => {
   formBody.append("ClientSecret", MITSUI_CLIENT_SECRET);
 
   const localRequestTime = new Date();
-  console.log("[Mitsui] Requesting access token...");
+  // console.log("[Mitsui] Requesting access token...");
   const response = await fetch(
-    "https://betaapi.mitsuilease.co.id:4200/oauth/v1/auth/accesstoken?GrantType=client_credentials",
+    "https://api.mitsuilease.co.id:4200/oauth/v1/auth/accesstoken?GrantType=client_credentials",
     {
       method: "POST",
       headers: {
@@ -26,7 +26,7 @@ export const getAccessTokenFromMitsui = async () => {
   );
 
   const json = await response.json();
-  console.log("[Mitsui] Access Token Response:", json);
+  // console.log("[Mitsui] Access Token Response:", json);
   if (!json.Data) throw new Error("Failed to get Mitsui access token");
 
   return {
@@ -41,7 +41,7 @@ export const loginToMitsui = async ({ username, password }) => {
   const timestamp = new Date().toISOString();
   const method = "POST";
   const endpointPath = "/common/v1/mobile/login";
-  const fullUrl = `https://betaapi.mitsuilease.co.id:4151${endpointPath}`;
+  const fullUrl = `https://api.mitsuilease.co.id:4151${endpointPath}`;
   const clientSecret = MITSUI_CLIENT_SECRET;
 
   const body = { Username: username, Password: password };
@@ -69,7 +69,7 @@ export const loginToMitsui = async ({ username, password }) => {
   });
   
   const result = await response.json();
-  console.log("LOGIN FULL RESULT:", JSON.stringify(result, null, 2));
+  // console.log("LOGIN FULL RESULT:", JSON.stringify(result, null, 2));
   return {
     result,
     accessToken: tokenData.AccessToken,

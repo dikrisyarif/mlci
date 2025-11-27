@@ -12,7 +12,7 @@ import HistoryScreen from '../screens/HistoryScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import DetailScreen from '../components/DetailScreen';
 import ListContractScreen from '../screens/ListContractScreen';
-import MapTrackingScreen from '../screens/MapTrackingScreen';
+import MapTrackingScreen from '../screens/map/MapTrackingScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();

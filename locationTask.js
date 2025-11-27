@@ -1,7 +1,8 @@
 import * as TaskManager from "expo-task-manager";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Database from "./utils/database";
+import { getLocalWIBString } from "./utils/trackingHelper";
 import { saveCheckinToServer, isStartedApi } from "./api/listApi";
 import { TRACKING_CONFIG } from "./config/trackingConfig";
 import {
@@ -23,8 +24,12 @@ async function getUserName() {
 
 // ===== helper baru: getLastTrackedLocation =====
 async function getLastTrackedLocation() {
-  const lastLocStr = await AsyncStorage.getItem("lastTrackedLocation");
-  return lastLocStr ? JSON.parse(lastLocStr) : null;
+  try {
+    const lastLocStr = await Database.getAppState("lastTrackedLocation");
+    return lastLocStr ? JSON.parse(lastLocStr) : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // ===== improved checkAndStopTracking dengan throttling & return status =====
@@ -56,7 +61,7 @@ async function checkAndStopTracking(employeeName) {
         await Location.stopLocationUpdatesAsync(
           TRACKING_CONFIG.LOCATION_TASK_NAME
         );
-        await AsyncStorage.setItem("isTracking", "false");
+        await Database.saveAppState('isTracking', 'false');
 
         return { stopped: true, statusResponse };
       }
@@ -87,31 +92,19 @@ async function savePendingLocation(location, employeeName) {
   });
 
   try {
-    const pendingLocationsStr = await AsyncStorage.getItem("pendingLocations");
-    const pendingLocations = pendingLocationsStr
-      ? JSON.parse(pendingLocationsStr)
-      : [];
+    // Save to SQLite background_tracks table instead of AsyncStorage
+    await Database.saveBackgroundLocation({
+      latitude: locationData.latitude,
+      longitude: locationData.longitude,
+      timestamp: locationData.timestamp,
+      employee_name: employeeName,
+      is_uploaded: 0,
+    }, employeeName);
 
-    pendingLocations.push(locationData);
-
-    if (pendingLocations.length > TRACKING_CONFIG.MAX_LOCAL_RECORDS) {
-      pendingLocations.splice(
-        0,
-        pendingLocations.length - TRACKING_CONFIG.MAX_LOCAL_RECORDS
-      );
-    }
-
-    await AsyncStorage.setItem(
-      "pendingLocations",
-      JSON.stringify(pendingLocations)
-    );
-
-    await AsyncStorage.setItem(
+    // Keep a lightweight last location in app_state for quick checks
+    await Database.saveAppState(
       "lastTrackedLocation",
-      JSON.stringify({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      })
+      JSON.stringify({ latitude: location.coords.latitude, longitude: location.coords.longitude })
     );
   } catch (error) {
     // ignore
@@ -120,7 +113,7 @@ async function savePendingLocation(location, employeeName) {
 
 // ===== upload batch ke server =====
 async function uploadPendingLocationsToServer(employeeName) {
-  const lastUpload = await AsyncStorage.getItem("lastServerUpload");
+  const lastUpload = await Database.getAppState("lastServerUpload");
   const currentTime = Date.now();
   const lastUploadTime = lastUpload ? parseInt(lastUpload, 10) : 0;
 
@@ -129,39 +122,72 @@ async function uploadPendingLocationsToServer(employeeName) {
   }
 
   try {
-    const pendingLocationsStr = await AsyncStorage.getItem("pendingLocations");
-    if (!pendingLocationsStr) return;
+    // Read unuploaded tracks from SQLite
+    const rows = await Database.getUnuploadedTracks(employeeName);
+    if (!rows || rows.length === 0) return;
 
-    const pendingLocations = JSON.parse(pendingLocationsStr);
+    // Only upload records that belong to today's WIB date.
+    // This avoids uploading older-day data when the app is started the next morning.
+    const todayWIB = getLocalWIBString(new Date()).slice(0, 10); // YYYY-MM-DD
+    const rowsForToday = rows.filter(r => {
+      try {
+        const ts = (r.timestamp || '').slice(0, 10);
+        return ts === todayWIB;
+      } catch (e) {
+        return false;
+      }
+    });
+
+    if (!rowsForToday || rowsForToday.length === 0) {
+      console.log('[BG TASK] No unuploaded tracks for today (WIB), skipping upload.');
+      return;
+    }
 
     let sentCount = 0;
     let failedCount = 0;
-    const remainingLocations = [];
+    const successfulIds = [];
 
-    for (const loc of pendingLocations) {
+    for (const r of rowsForToday) {
+      const loc = {
+        latitude: r.latitude,
+        longitude: r.longitude,
+        timestamp: r.timestamp,
+        id: r.id,
+      };
       if (await tryUploadLocation(loc, employeeName)) {
         sentCount++;
+        successfulIds.push(r.id);
       } else {
         failedCount++;
-        remainingLocations.push(loc);
       }
     }
 
-    console.log(
-      "[BG TASK] MULAI UPLOAD pendingLocations:",
-      pendingLocations.length
-    );
+    console.log("[BG TASK] MULAI UPLOAD unuploaded tracks for today:", rowsForToday.length, `(skipped ${rows.length - rowsForToday.length} older records)`);
 
-    await AsyncStorage.setItem(
-      "pendingLocations",
-      JSON.stringify(remainingLocations)
-    );
+    if (successfulIds.length > 0) {
+      await Database.markTracksAsUploaded(successfulIds);
+    }
 
     if (sentCount > 0) {
-      await AsyncStorage.setItem("lastServerUpload", currentTime.toString());
+      await Database.saveAppState("lastServerUpload", currentTime.toString());
       console.log(
         `[BG Tracking] Batch upload complete. Success: ${sentCount}, Failed: ${failedCount}. WIB: ${getLocalWIBLogString()}`
       );
+      // If this is the first time we successfully synced (no previous lastServerUpload),
+      // delete older-day records (keep only today's data) for this employee to avoid
+      // uploading historical data later.
+      try {
+        if (lastUploadTime === 0) {
+          const todayWIB = getLocalWIBString(new Date()).slice(0, 10);
+          // delete older records from background_tracks, checkin_startstop, contract_checkins
+          await Database.executeWithLog('runAsync', 'DELETE FROM background_tracks WHERE employee_name = ? AND substr(timestamp,1,10) < ?;', [employeeName, todayWIB], false, true);
+          await Database.executeWithLog('runAsync', 'DELETE FROM checkin_startstop WHERE employee_name = ? AND substr(timestamp,1,10) < ?;', [employeeName, todayWIB], false, true);
+          await Database.executeWithLog('runAsync', 'DELETE FROM contract_checkins WHERE employee_name = ? AND substr(timestamp,1,10) < ?;', [employeeName, todayWIB], false, true);
+          console.log('[BG TASK] Deleted older-day local records as part of first sync for', employeeName);
+        }
+      } catch (delErr) {
+        console.warn('[BG TASK] Failed deleting older-day records on first sync:', delErr?.message || delErr);
+      }
     }
   } catch (error) {
     // ignore
@@ -188,14 +214,9 @@ async function tryUploadLocation(loc, employeeName) {
       validatePayload(payload);
       await saveCheckinToServer(payload);
 
-      await AsyncStorage.setItem("lastTrackingSentTimestamp", loc.timestamp);
-      await AsyncStorage.setItem(
-        "lastTrackingSentLoc",
-        JSON.stringify({
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-        })
-      );
+      // persist last sent info into app_state
+      await Database.saveAppState('lastTrackingSentTimestamp', loc.timestamp);
+      await Database.saveAppState('lastTrackingSentLoc', JSON.stringify({ latitude: loc.latitude, longitude: loc.longitude }));
 
       return true;
     } catch (error) {

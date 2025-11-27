@@ -40,11 +40,17 @@ export const migrateDatabase = async (db, oldVersion, newVersion) => {
     `);
 
     // Add 'address' column if it doesn't exist (patch for old users)
-    const columns = await db.getAllAsync(`PRAGMA table_info(${DB_CONFIG.tables.contract_checkins});`);
-    const hasAddress = columns.some(c => c.name === "address");
+    const columns = await db.getAllAsync(
+      `PRAGMA table_info(${DB_CONFIG.tables.contract_checkins});`
+    );
+    const hasAddress = columns.some((c) => c.name === "address");
     if (!hasAddress) {
-      console.log("[MIGRATION] Adding 'address' column to contract_checkins...");
-      await db.execAsync(`ALTER TABLE ${DB_CONFIG.tables.contract_checkins} ADD COLUMN address TEXT;`);
+      console.log(
+        "[MIGRATION] Adding 'address' column to contract_checkins..."
+      );
+      await db.execAsync(
+        `ALTER TABLE ${DB_CONFIG.tables.contract_checkins} ADD COLUMN address TEXT;`
+      );
     }
 
     // -------------------------
@@ -77,12 +83,25 @@ export const migrateDatabase = async (db, oldVersion, newVersion) => {
         value TEXT
       );
     `);
+    // -------------------------
+    // checkin_startstop
+    // -------------------------
+    await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS ${DB_CONFIG.tables.checkin_startstop} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_name TEXT NOT NULL,
+      type TEXT NOT NULL,          -- start | stop
+      latitude REAL,
+      longitude REAL,
+      timestamp TEXT NOT NULL,
+      is_uploaded INTEGER DEFAULT 0
+    );
+`);
 
     // Commit atomic migration
     await db.execAsync("COMMIT;");
     logDbOperation("migrate", "completed");
     console.log("[MIGRATION] Database migration successful.");
-
   } catch (error) {
     // Safety rollback
     try {

@@ -1,11 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Database from '../../utils/database';
 
 /**
  * Update last server upload time
  */
 export async function updateLastUploadTime() {
   try {
-    await AsyncStorage.setItem('lastServerUpload', Date.now().toString());
+    await Database.saveAppState('lastServerUpload', Date.now().toString());
   } catch (error) {
     // console.error('[storageService] Update upload time error:', error);
   }
@@ -16,7 +16,7 @@ export async function updateLastUploadTime() {
  */
 export async function getLastUploadTime() {
   try {
-    const lastUploadStr = await AsyncStorage.getItem('lastServerUpload');
+    const lastUploadStr = await Database.getAppState('lastServerUpload');
     return lastUploadStr ? parseInt(lastUploadStr, 10) : 0;
   } catch (error) {
     // console.error('[storageService] Get upload time error:', error);
@@ -29,14 +29,8 @@ export async function getLastUploadTime() {
  */
 export async function updateLastSentInfo(loc) {
   try {
-    await AsyncStorage.setItem('lastTrackingSentTimestamp', loc.timestamp);
-    await AsyncStorage.setItem(
-      'lastTrackingSentLoc',
-      JSON.stringify({
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-      })
-    );
+    await Database.saveAppState('lastTrackingSentTimestamp', loc.timestamp);
+    await Database.saveAppState('lastTrackingSentLoc', JSON.stringify({ latitude: loc.latitude, longitude: loc.longitude }));
   } catch (error) {
     // console.error('[storageService] Update sent info error:', error);
   }
@@ -47,8 +41,8 @@ export async function updateLastSentInfo(loc) {
  */
 export async function isDuplicateLocation(loc) {
   try {
-    const lastSentTimestamp = await AsyncStorage.getItem('lastTrackingSentTimestamp');
-    const lastSentLocStr = await AsyncStorage.getItem('lastTrackingSentLoc');
+    const lastSentTimestamp = await Database.getAppState('lastTrackingSentTimestamp');
+    const lastSentLocStr = await Database.getAppState('lastTrackingSentLoc');
 
     if (lastSentTimestamp && lastSentLocStr) {
       const lastLoc = JSON.parse(lastSentLocStr);
@@ -70,8 +64,8 @@ export async function isDuplicateLocation(loc) {
  */
 export async function isTooCloseToCheckin(loc, TRACKING_CONFIG) {
   try {
-    const lastCheckinStartTimestamp = await AsyncStorage.getItem('lastCheckinStartTimestamp');
-    const lastCheckinStartLocStr = await AsyncStorage.getItem('lastCheckinStartLoc');
+    const lastCheckinStartTimestamp = await Database.getAppState('lastCheckinStartTimestamp');
+    const lastCheckinStartLocStr = await Database.getAppState('lastCheckinStartLoc');
 
     if (lastCheckinStartTimestamp && lastCheckinStartLocStr) {
       const lastCheckinLoc = JSON.parse(lastCheckinStartLocStr);

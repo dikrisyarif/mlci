@@ -1,9 +1,10 @@
 // context/MapContext.js
 import React, { createContext, useContext, useState, useEffect } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { saveCheckinToServer } from "../api/listApi";
 import { useAuth } from "./AuthContext";
 import * as Location from "expo-location";
+import * as Database from "../utils/database";
+import { getLocalTrackings } from "../utils/map/trackingDB";
 
 const MapContext = createContext();
 
@@ -14,30 +15,40 @@ export const MapProvider = ({ children }) => {
 
   const loadCheckinsFromStorage = async () => {
     try {
-      const json = await AsyncStorage.getItem("CheckinLocations");
-      let parsed;
-      try {
-        parsed = JSON.parse(json || "[]");
-        if (!Array.isArray(parsed)) parsed = [];
-      } catch (err) {
-        // console.error("[MapContext] Invalid JSON format:", err);
-        parsed = [];
+      // read combined tracking data from sqlite
+      const employeeName = state?.userInfo?.UserName || state?.userInfo?.username;
+      if (!employeeName) {
+        setCheckinLocations([]);
+        return;
       }
-      setCheckinLocations(parsed);
-      // //console.log('[MapContext] Loaded check-ins from storage:', parsed);
+  const rows = await getLocalTrackings(employeeName);
+      const mapped = rows.map(r => ({
+        contractId: r.lease_no || null,
+        contractName: r.cust_name || null,
+        latitude: r.latitude,
+        longitude: r.longitude,
+        timestamp: r.checkin_date,
+        tipechekin: (r.label_map || 'Tracking').toLowerCase(),
+      }));
+      setCheckinLocations(mapped);
     } catch (e) {
-      // console.error("[MapContext] Error loading CheckinLocations:", e);
+      console.warn('[MapContext] loadCheckinsFromStorage error:', e?.message || e);
       setCheckinLocations([]);
     }
   };
 
   const clearCheckins = async () => {
     try {
-      await AsyncStorage.removeItem("CheckinLocations");
+      const employeeName = state?.userInfo?.UserName || state?.userInfo?.username;
+      if (employeeName) {
+        // remove from sqlite for this employee
+        await Database.executeWithLog('runAsync', 'DELETE FROM background_tracks WHERE employee_name = ?;', [employeeName], false, true);
+        await Database.executeWithLog('runAsync', 'DELETE FROM checkin_startstop WHERE employee_name = ?;', [employeeName], false, true);
+        await Database.executeWithLog('runAsync', 'DELETE FROM contract_checkins WHERE employee_name = ?;', [employeeName], false, true);
+      }
       setCheckinLocations([]);
-      // //console.log('[MapContext] Cleared all check-ins');
     } catch (e) {
-      // console.error("[MapContext] Error clearing checkins:", e);
+      console.warn('[MapContext] Error clearing checkins:', e?.message || e);
     }
   };
 
@@ -55,22 +66,13 @@ export const MapProvider = ({ children }) => {
 
     const cacheKey = `address_${latitude}_${longitude}`;
     try {
-      // Cek cache dulu
-      const cached = await AsyncStorage.getItem(cacheKey);
+      // check app_state cache first
+      const cached = await Database.getAppState(cacheKey);
       if (cached) return cached;
 
-      // Coba dapatkan alamat dari Google API
+      // Try reverse geocode
       try {
-        const geocode = await Location.reverseGeocodeAsync(
-          {
-            latitude,
-            longitude,
-          },
-          {
-            useGoogleMaps: false, // Gunakan Expo's default geocoding jika Google Maps tidak tersedia
-          }
-        );
-
+        const geocode = await Location.reverseGeocodeAsync({ latitude, longitude }, { useGoogleMaps: false });
         let bestAddress = "";
         if (geocode && geocode[0]) {
           const g = geocode[0];
@@ -83,22 +85,19 @@ export const MapProvider = ({ children }) => {
           else if (city) bestAddress = city;
         }
 
-        // Jika dapat alamat, simpan ke cache
         if (bestAddress) {
-          await AsyncStorage.setItem(cacheKey, bestAddress);
+          await Database.saveAppState(cacheKey, bestAddress);
           return bestAddress;
         }
       } catch (geoErr) {
-        //console.warn('[MapContext] Geocoding failed, using coordinates as fallback:', geoErr.message);
+        // ignore geocode errors, fallback below
       }
 
-      // Fallback: gunakan format koordinat jika geocoding gagal
       const fallbackAddress = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-      await AsyncStorage.setItem(cacheKey, fallbackAddress);
+      await Database.saveAppState(cacheKey, fallbackAddress);
       return fallbackAddress;
     } catch (err) {
-      // console.error("[MapContext] Address processing error:", err);
-      // Fallback terakhir jika semua gagal
+      // fallback
       return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
     }
   }
@@ -121,21 +120,39 @@ export const MapProvider = ({ children }) => {
       if (isDuplicate) return;
       const updated = [...checkinLocations, locWithLocalTime];
       setCheckinLocations(updated);
-      await AsyncStorage.setItem("CheckinLocations", JSON.stringify(updated));
 
-      // Simpan info check-in start ke AsyncStorage untuk filter tracking background
-      if (locWithLocalTime.tipechekin === "start") {
-        await AsyncStorage.setItem(
-          "lastCheckinStartTimestamp",
-          locWithLocalTime.timestamp
-        );
-        await AsyncStorage.setItem(
-          "lastCheckinStartLoc",
-          JSON.stringify({
-            latitude: locWithLocalTime.latitude,
-            longitude: locWithLocalTime.longitude,
-          })
-        );
+      // persist to sqlite using appropriate helper depending on type
+      const employeeName = state?.userInfo?.UserName || state?.userInfo?.username || '';
+      if (locWithLocalTime.tipechekin === 'start' || locWithLocalTime.tipechekin === 'stop') {
+        await Database.addCheckinStartStop({
+          employee_name: employeeName,
+          type: locWithLocalTime.tipechekin,
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+        });
+        // save lastCheckinStartTimestamp/Loc to app_state for other services
+        if (locWithLocalTime.tipechekin === 'start') {
+          await Database.saveAppState('lastCheckinStartTimestamp', locWithLocalTime.timestamp);
+          await Database.saveAppState('lastCheckinStartLoc', JSON.stringify({ latitude: locWithLocalTime.latitude, longitude: locWithLocalTime.longitude }));
+        }
+      } else if (locWithLocalTime.tipechekin === 'kontrak' || locWithLocalTime.tipechekin === 'contract' || locWithLocalTime.tipechekin === 'checkin') {
+        await Database.addCheckin({
+          lease_no: locWithLocalTime.contractId || '_contract_',
+          employee_name: employeeName,
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+          comment: locWithLocalTime.remark || locWithLocalTime.comment || '',
+          address: locWithLocalTime.address || '',
+        });
+      } else {
+        // tracking/background
+        await Database.saveBackgroundLocation({
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+        }, employeeName);
       }
 
       // Kirim ke server (start, stop, kontrak semuanya pakai address terbaik)
@@ -181,9 +198,40 @@ export const MapProvider = ({ children }) => {
       if (isDuplicate) return;
       const updated = [...checkinLocations, locWithLocalTime];
       setCheckinLocations(updated);
-      await AsyncStorage.setItem("CheckinLocations", JSON.stringify(updated));
+
+      // persist locally like addCheckin but without calling API
+      const employeeName = state?.userInfo?.UserName || state?.userInfo?.username || '';
+      if (locWithLocalTime.tipechekin === 'start' || locWithLocalTime.tipechekin === 'stop') {
+        await Database.addCheckinStartStop({
+          employee_name: employeeName,
+          type: locWithLocalTime.tipechekin,
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+        });
+        if (locWithLocalTime.tipechekin === 'start') {
+          await Database.saveAppState('lastCheckinStartTimestamp', locWithLocalTime.timestamp);
+          await Database.saveAppState('lastCheckinStartLoc', JSON.stringify({ latitude: locWithLocalTime.latitude, longitude: locWithLocalTime.longitude }));
+        }
+      } else if (locWithLocalTime.tipechekin === 'kontrak' || locWithLocalTime.tipechekin === 'contract' || locWithLocalTime.tipechekin === 'checkin') {
+        await Database.addCheckin({
+          lease_no: locWithLocalTime.contractId || '_contract_',
+          employee_name: employeeName,
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+          comment: locWithLocalTime.remark || locWithLocalTime.comment || '',
+          address: locWithLocalTime.address || '',
+        });
+      } else {
+        await Database.saveBackgroundLocation({
+          latitude: locWithLocalTime.latitude,
+          longitude: locWithLocalTime.longitude,
+          timestamp: locWithLocalTime.timestamp,
+        }, employeeName);
+      }
     } catch (e) {
-      // console.error("[MapContext] Error saving checkin (local only):", e);
+      console.warn('[MapContext] Error saving checkin (local only):', e?.message || e);
     }
   };
 

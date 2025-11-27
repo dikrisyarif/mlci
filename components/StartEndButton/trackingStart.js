@@ -62,15 +62,12 @@ export const handleStartTracking = async ({
 
     // 6️⃣ Simpan ke SQLite
     await Database.saveAppState("isTracking", "true");
-    await Database.addCheckin({
+    await Database.addCheckinStartStop({
       employee_name: employeeName,
-      lease_no: "_tracking_",
+      type: "start",
       latitude: loc.coords.latitude,
       longitude: loc.coords.longitude,
       timestamp,
-      comment: "Start tracking",
-      is_uploaded: 0,
-      tipechekin: "start",
     });
 
     // 7️⃣ Coba sync ke server
@@ -83,15 +80,9 @@ export const handleStartTracking = async ({
       Alert.alert("Mode Offline", "Status start disimpan offline.");
     }
 
-    // 8️⃣ Simpan ke AsyncStorage
-    await AsyncStorage.setItem("lastCheckinStartTimestamp", timestamp);
-    await AsyncStorage.setItem(
-      "lastCheckinStartLoc",
-      JSON.stringify({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-      })
-    );
+    // 8️⃣ Save last checkin reference to sqlite app_state (used by tracking filters)
+    await Database.saveAppState('lastCheckinStartTimestamp', timestamp);
+    await Database.saveAppState('lastCheckinStartLoc', JSON.stringify({ latitude: loc.coords.latitude, longitude: loc.coords.longitude }));
 
     // 9️⃣ Mulai background tracking
     await startBackgroundTracking(authState?.userInfo);

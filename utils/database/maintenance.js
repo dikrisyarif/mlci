@@ -9,6 +9,7 @@ export const cleanDailyData = async () => {
     // Clear daily operational data
     await db.execAsync('DELETE FROM background_tracks WHERE is_uploaded = 1;');
     await db.execAsync('DELETE FROM contract_checkins WHERE is_uploaded = 1;');
+    await db.execAsync('DELETE FROM checkin_startstop WHERE is_uploaded = 1;');
     await db.execAsync('DELETE FROM app_state WHERE key != "db_version";');
     //console.log('✅ Daily data cleanup completed');
     return trackingStatus === 'true';

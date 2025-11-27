@@ -1,5 +1,5 @@
 // Core database functionality
-export { initDatabase, getDb } from './core';
+export { initDatabase, getDb, executeWithLog, runQuery, runCommand, runGetFirst } from './core';
 export { resetDatabase } from './reset';
 
 // Tracking operations
@@ -19,6 +19,7 @@ export { getContractsRaw } from './contracts';
 // Check-in operations
 export { 
     addCheckin,
+    addCheckinStartStop,
     saveContractCheckin,
     getUnuploadedCheckins,
     isContractCheckedIn,
