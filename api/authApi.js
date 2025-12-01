@@ -15,7 +15,7 @@ export const getAccessTokenFromMitsui = async () => {
   const localRequestTime = new Date();
   // console.log("[Mitsui] Requesting access token...");
   const response = await fetch(
-    "https://api.mitsuilease.co.id:4200/oauth/v1/auth/accesstoken?GrantType=client_credentials",
+    "https://betaapi.mitsuilease.co.id:4200/oauth/v1/auth/accesstoken?GrantType=client_credentials",
     {
       method: "POST",
       headers: {
@@ -41,7 +41,7 @@ export const loginToMitsui = async ({ username, password }) => {
   const timestamp = new Date().toISOString();
   const method = "POST";
   const endpointPath = "/common/v1/mobile/login";
-  const fullUrl = `https://api.mitsuilease.co.id:4151${endpointPath}`;
+  const fullUrl = `https://betaapi.mitsuilease.co.id:4151${endpointPath}`;
   const clientSecret = MITSUI_CLIENT_SECRET;
 
   const body = { Username: username, Password: password };

@@ -12,7 +12,7 @@ import {
   resolvePendingTokenWaiters,
 } from "../utils/requestLocks";
 
-const BASE_URL = "https://api.mitsuilease.co.id:4151";
+const BASE_URL = "https://betaapi.mitsuilease.co.id:4151";
 const MITSUI_CLIENT_SECRET =
   Constants.expoConfig?.extra?.MITSUI_CLIENT_SECRET ||
   process.env.MITSUI_CLIENT_SECRET;
